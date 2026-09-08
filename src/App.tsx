@@ -1,4 +1,4 @@
-import { Component, useEffect } from 'react'
+import { Component, lazy, Suspense, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
@@ -8,20 +8,31 @@ import { portrait } from '@/lib/art'
 import { getBasename } from '@/lib/pb'
 import { reportErr } from '@/lib/utils'
 import { Layout } from '@/components/Layout'
-import { HomePage } from '@/pages/Home'
-import { AuthPage } from '@/pages/Auth'
-import { YuanfenPage } from '@/pages/Yuanfen'
-import { ExplorePage } from '@/pages/Explore'
-import { NearbyPage } from '@/pages/Nearby'
-import { VerifyPage } from '@/pages/Verify'
-import { MePage } from '@/pages/Me'
-import { MatchesPage } from '@/pages/Matches'
-import { CommunityPage } from '@/pages/Community'
-import { EventsPage } from '@/pages/Events'
-import { FavoritesPage } from '@/pages/Favorites'
-import { ReportPage } from '@/pages/Report'
-import { BadgesPage } from '@/pages/Badges'
-import { AdminPage } from '@/pages/Admin'
+
+// 页面按需加载: 首屏只下载当前路由的代码包, 其余页面点到再取
+const HomePage = lazy(() => import('@/pages/Home').then((m) => ({ default: m.HomePage })))
+const AuthPage = lazy(() => import('@/pages/Auth').then((m) => ({ default: m.AuthPage })))
+const YuanfenPage = lazy(() => import('@/pages/Yuanfen').then((m) => ({ default: m.YuanfenPage })))
+const ExplorePage = lazy(() => import('@/pages/Explore').then((m) => ({ default: m.ExplorePage })))
+const NearbyPage = lazy(() => import('@/pages/Nearby').then((m) => ({ default: m.NearbyPage })))
+const VerifyPage = lazy(() => import('@/pages/Verify').then((m) => ({ default: m.VerifyPage })))
+const MePage = lazy(() => import('@/pages/Me').then((m) => ({ default: m.MePage })))
+const MatchesPage = lazy(() => import('@/pages/Matches').then((m) => ({ default: m.MatchesPage })))
+const CommunityPage = lazy(() => import('@/pages/Community').then((m) => ({ default: m.CommunityPage })))
+const EventsPage = lazy(() => import('@/pages/Events').then((m) => ({ default: m.EventsPage })))
+const FavoritesPage = lazy(() => import('@/pages/Favorites').then((m) => ({ default: m.FavoritesPage })))
+const ReportPage = lazy(() => import('@/pages/Report').then((m) => ({ default: m.ReportPage })))
+const BadgesPage = lazy(() => import('@/pages/Badges').then((m) => ({ default: m.BadgesPage })))
+const AdminPage = lazy(() => import('@/pages/Admin').then((m) => ({ default: m.AdminPage })))
+
+/** 路由切换加载代码包时的过渡 */
+function PageLoading() {
+  return (
+    <div className="clouds-paper flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground">
+      正在展开这一页…
+    </div>
+  )
+}
 
 function ScrollToTop() {
   const { pathname } = useLocation()
@@ -104,6 +115,7 @@ export default function App() {
           <ScrollToTop />
           <ImgGuard />
           <Toaster position="top-center" richColors toastOptions={{ style: { fontFamily: 'inherit' } }} />
+          <Suspense fallback={<PageLoading />}>
           <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<HomePage />} />
@@ -125,6 +137,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </ErrorBoundary>
     </StoreProvider>
