@@ -26,3 +26,7 @@ project/.rh_attachments
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright 产物
+test-results/
+playwright-report/
