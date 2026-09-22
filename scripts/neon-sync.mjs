@@ -92,6 +92,7 @@ async function mirrorTable(client, name, rows) {
   await client.query(
     `CREATE TABLE IF NOT EXISTS "${name}" (id text PRIMARY KEY${colDefs ? ', ' + colDefs : ''}, synced_at timestamptz NOT NULL DEFAULT now())`,
   )
+  await client.query(`ALTER TABLE "${name}" ADD COLUMN IF NOT EXISTS synced_at timestamptz NOT NULL DEFAULT now()`)
   for (const c of schema) {
     await client.query(`ALTER TABLE "${name}" ADD COLUMN IF NOT EXISTS "${c.col}" ${c.type}`)
   }
@@ -122,6 +123,24 @@ async function main() {
     body: JSON.stringify({ identity: admin, password: pass }),
   })
   const data = await readAll(auth.token)
+
+  // 账号密码哈希补全：管理接口不返回 password 字段，从底层存储只读取出，
+  // 保证迁移后老账号可以用原密码登录（网关按同一哈希校验）。
+  const PB_DB = process.env.PB_DB ?? '/workspace/pocketbase-bin/pb_data/data.db'
+  try {
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(PB_DB, { readOnly: true })
+    const hashes = db.prepare('select id, password from users').all()
+    db.close()
+    const byId = new Map(hashes.map((r) => [r.id, r.password]))
+    for (const u of data.users ?? []) {
+      const h = byId.get(u.id)
+      if (h) u.password = h
+    }
+    console.log(`  已补全 ${hashes.length} 个账号的密码哈希`)
+  } catch (e) {
+    console.warn(`  警告：读取密码哈希失败（${e.message}），老账号密码将无法迁移`)
+  }
 
   const names = Object.keys(data)
   const total = names.reduce((s, n) => s + data[n].length, 0)

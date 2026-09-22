@@ -39,7 +39,7 @@ def colname(fn):
 out = [
     "-- Neon(Postgres) 表结构：由现有数据服务 schema 自动生成",
     "-- id 为主键(text)；created/updated 为时间戳；业务字段按原类型映射(text/number/bool/json)",
-    "-- 列名统一 snake_case 小写（如 emailVisibility -> email_visibility）",
+    "-- 列名统一 snake_case 小写并加引号（desc 等保留字可用；emailVisibility -> email_visibility）",
     "",
 ]
 n_tables = 0
@@ -62,17 +62,19 @@ for c in cols["items"]:
         pgt = "text" if ft == "password" else TYPE.get(ft, "jsonb")
         if ft == "password":
             cn = "password_hash"
-        lines.append(f"{cn} {pgt}")
+        lines.append(f'"{cn}" {pgt}')
     lines.append("created timestamptz NOT NULL DEFAULT now()")
     lines.append("updated timestamptz NOT NULL DEFAULT now()")
+    lines.append("synced_at timestamptz NOT NULL DEFAULT now()")
     out.append(f"CREATE TABLE IF NOT EXISTS {name} (")
     out.append(",\n".join("  " + l for l in lines))
     out.append(");")
     for f in fields:
         fn = f.get("name")
         if fn.endswith("_sid") or fn in ("email", "sid"):
+            cn = "password_hash" if f.get("type") == "password" else colname(fn)
             uniq = "UNIQUE " if (fn == "sid") or (name == "users" and fn == "email") else ""
-            out.append(f"CREATE {uniq}INDEX IF NOT EXISTS idx_{name}_{fn} ON {name} ({fn});")
+            out.append(f'CREATE {uniq}INDEX IF NOT EXISTS idx_{name}_{cn} ON {name} ("{cn}");')
     out.append("")
 
 open("scripts/neon-schema.sql", "w").write("\n".join(out))
