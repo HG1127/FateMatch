@@ -9,8 +9,11 @@ if [ -z "${NEON_DSN:-}" ]; then
   export NEON_DSN
 fi
 mkdir -p logs
-PID=$(lsof -ti tcp:7000 2>/dev/null || true)
-if [ -n "$PID" ]; then echo "7000 端口被占用 (pid $PID)，请先停止旧进程" >&2; exit 1; fi
+# 端口占用检查（容器无 lsof，用连接探测代替）
+if python3 -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1',7000))==0 else 1)" 2>/dev/null; then
+  echo "7000 端口已被占用，请先停止旧网关进程再启动" >&2
+  exit 1
+fi
 nohup node server/neon-gateway.mjs >> logs/neon-gateway.log 2>&1 &
 echo "网关已启动 pid $!，日志 logs/neon-gateway.log"
 sleep 2
