@@ -22,6 +22,13 @@
 - 原 Supabase 快照线（10）停用：其数据源是已冻结的旧库，仅作历史工具保留。
 - `scripts/neon-sync.mjs` 保留用途：从冻结旧库向 Neon 重新灌数（重建/补迁），带 `--dry` 试运行。
 
+## 发布冒烟（自动化）
+
+- 入口：`NEON_DSN='postgresql://…' pnpm e2e`（Playwright，3 例）。
+- 数据隔离：自动在 Neon 建一次性 schema（e2e_smoke）+ 拉起独立网关实例（7200 端口），全链路（注册/登录/发帖/属主隔离/权限拦截/改密/清理）跑完即销毁 schema，不碰生产数据。
+- 页面服务启动检查只读跑 8000。
+- 入参校验已 zod 化（注册 / 登录 / 改密），字段级错误消息与原服务风格一致。
+
 ## 迁移记录（2026-09-22）
 
 - 表结构：`scripts/gen-neon-schema.py` 从原服务 schema 生成 `scripts/neon-schema.sql`（22 表；列名 snake_case 加引号，`desc` 等保留字可用；`users.password` → `password_hash`；剔除 `tokenKey`）。

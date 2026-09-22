@@ -3,21 +3,27 @@
 //
 // 启动（密钥只走环境变量，不落盘不进仓库）：
 //   NEON_DSN='postgresql://…?sslmode=require' node server/neon-gateway.mjs
-// 可选：PORT（默认 7000）。
+// 可选：PORT（默认 7000）、NEON_SCHEMA（默认 public，测试用隔离 schema）。
 //
 // 实现的接口语义与权限规则 1:1 复刻自原数据服务（规则快照见 docs/09），
 // 包括：公开表全量可读、私有表按属主过滤、管理员表仅管理员可见。
+// 入参校验用 zod 代码化（注册 / 登录 / 改密）。
 import http from 'node:http'
 import crypto from 'node:crypto'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
+import { z } from 'zod'
 
 const PORT = Number(process.env.PORT ?? 7000)
+const SCHEMA = process.env.NEON_SCHEMA ?? 'public'
 const DSN = process.env.NEON_DSN
 if (!DSN) {
   console.error('缺少 NEON_DSN 环境变量')
   process.exit(1)
 }
+
+/** schema 限定的表引用 */
+const tq = (name) => `"${SCHEMA}"."${name}"`
 
 const pool = new pg.Pool({
   connectionString: DSN,
@@ -43,14 +49,48 @@ async function q(text, params) {
   throw last
 }
 
+// ---------- 入参校验（zod） ----------
+
+const AuthBody = z.object({
+  identity: z.string().trim().min(3, '请输入邮箱').max(320, '邮箱过长'),
+  password: z.string().min(1, '请输入密码').max(200, '密码过长'),
+})
+
+const RegisterBody = z.object({
+  email: z.string().trim().min(3, '请输入邮箱').max(320, '邮箱过长'),
+  password: z.string().min(8, '密码至少 8 位').max(200, '密码过长'),
+  passwordConfirm: z.string().min(8, '密码至少 8 位').max(200, '密码过长'),
+  name: z.string().max(60, '昵称过长').optional(),
+})
+
+const PasswordChangeBody = z.object({
+  oldPassword: z.string().min(1, '请输入旧密码').max(200, '密码过长'),
+  password: z.string().min(8, '密码至少 8 位').max(200, '密码过长'),
+  passwordConfirm: z.string().min(8, '密码至少 8 位').max(200, '密码过长'),
+})
+
+/** 校验失败抛 PB 风格的 400（字段级 message） */
+function vparse(schema, body) {
+  const r = schema.safeParse(body)
+  if (r.success) return r.data
+  const data = {}
+  for (const issue of r.error.issues) {
+    const key = String(issue.path[0] ?? 'form')
+    data[key] ??= { message: issue.message }
+  }
+  throw new HttpErr(400, 'Validation failed.', data)
+}
+
 // ---------- 表结构元数据 ----------
 
 /** table -> Map(column -> data_type) */
 const COLUMNS = new Map()
 
 async function loadColumns() {
+  await q(`create schema if not exists "${SCHEMA}"`)
   const r = await q(
-    `select table_name, column_name, data_type from information_schema.columns where table_schema = 'public'`,
+    `select table_name, column_name, data_type from information_schema.columns where table_schema = $1`,
+    [SCHEMA],
   )
   COLUMNS.clear()
   for (const row of r.rows) {
@@ -105,10 +145,10 @@ const b64u = (b) => Buffer.from(b).toString('base64url')
 let JWT_SECRET = ''
 
 async function loadSecret() {
-  await q(`create table if not exists gateway_meta (key text primary key, value text not null)`)
+  await q(`create table if not exists ${tq('gateway_meta')} (key text primary key, value text not null)`)
   const gen = crypto.randomBytes(32).toString('hex')
-  await q(`insert into gateway_meta (key, value) values ('jwt_secret', $1) on conflict (key) do nothing`, [gen])
-  const r = await q(`select value from gateway_meta where key = 'jwt_secret'`)
+  await q(`insert into ${tq('gateway_meta')} (key, value) values ('jwt_secret', $1) on conflict (key) do nothing`, [gen])
+  const r = await q(`select value from ${tq('gateway_meta')} where key = 'jwt_secret'`)
   JWT_SECRET = r.rows[0].value
 }
 
@@ -204,7 +244,7 @@ async function resolveAuth(req) {
   if (!token) return null
   const payload = verifyToken(token)
   if (!payload?.id) return null
-  const r = await q(`select role from profiles where sid = $1 limit 1`, [payload.id])
+  const r = await q(`select role from ${tq('profiles')} where sid = $1 limit 1`, [payload.id])
   return { id: payload.id, role: r.rows[0]?.role === 'admin' ? 'admin' : undefined }
 }
 
@@ -270,10 +310,10 @@ async function handleList(table, url, req, auth) {
   const scope = scopeWhere(RULES[table].list, auth)
   const where = scope ? `where ${scope.sql}` : ''
   const params = scope ? [...scope.params] : []
-  const cnt = await q(`select count(*)::int n from "${table}" ${where}`, params)
+  const cnt = await q(`select count(*)::int n from ${tq(table)} ${where}`, params)
   const totalItems = cnt.rows[0].n
   const r = await q(
-    `select * from "${table}" ${where} order by created asc, id asc limit $${params.length + 1} offset $${params.length + 2}`,
+    `select * from ${tq(table)} ${where} order by created asc, id asc limit $${params.length + 1} offset $${params.length + 2}`,
     [...params, perPage, (page - 1) * perPage],
   )
   return {
@@ -286,7 +326,7 @@ async function handleList(table, url, req, auth) {
 }
 
 async function handleViewOne(table, id, auth) {
-  const r = await q(`select * from "${table}" where id = $1`, [id])
+  const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   if (!allowRow(RULES[table].view, r.rows[0], auth)) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
@@ -303,27 +343,24 @@ async function handleCreate(table, body, auth) {
   const id = typeof body?.id === 'string' && body.id ? body.id : genId()
 
   if (table === 'users') {
-    // 注册：与原有约束一致（密码 ≥8 位、两次一致、邮箱唯一）
-    const email = String(body?.email ?? '').trim().toLowerCase()
-    const password = String(body?.password ?? '')
+    // 注册：zod 校验 + 邮箱唯一 + 密码哈希
+    const parsed = vparse(RegisterBody, body)
+    const email = parsed.email.toLowerCase()
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       throw new HttpErr(400, 'Validation failed.', { email: { message: '邮箱格式不正确' } })
     }
-    if (password.length < 8) {
-      throw new HttpErr(400, 'Validation failed.', { password: { message: '密码至少 8 位' } })
-    }
-    if (body?.passwordConfirm !== undefined && body.passwordConfirm !== password) {
+    if (parsed.passwordConfirm !== parsed.password) {
       throw new HttpErr(400, 'Validation failed.', { passwordConfirm: { message: '两次输入的密码不一致' } })
     }
-    const dup = await q(`select 1 from users where lower(email) = $1`, [email])
+    const dup = await q(`select 1 from ${tq('users')} where lower(email) = $1`, [email])
     if (dup.rows[0]) {
       throw new HttpErr(400, 'Validation failed.', { email: { message: '该邮箱已注册' } })
     }
-    const hash = bcrypt.hashSync(password, 10)
+    const hash = bcrypt.hashSync(parsed.password, 10)
     await q(
-      `insert into users (id, email, password_hash, name, avatar, email_visibility, verified, created, updated)
+      `insert into ${tq('users')} (id, email, password_hash, name, avatar, email_visibility, verified, created, updated)
        values ($1,$2,$3,$4,$5,false,false,now(),now())`,
-      [id, email, hash, String(body?.name ?? ''), ''],
+      [id, email, hash, String(parsed.name ?? ''), ''],
     )
   } else {
     const names = ['id', ...data.keys()]
@@ -331,16 +368,16 @@ async function handleCreate(table, body, auth) {
     const ph = names.map((_, i) => `$${i + 1}`)
     const quoted = names.map((n) => `"${n}"`)
     await q(
-      `insert into "${table}" (${quoted.join(',')}, created, updated) values (${ph.join(',')}, now(), now())`,
+      `insert into ${tq(table)} (${quoted.join(',')}, created, updated) values (${ph.join(',')}, now(), now())`,
       values,
     )
   }
-  const r = await q(`select * from "${table}" where id = $1`, [id])
+  const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   return toRecord(table, r.rows[0])
 }
 
 async function handleUpdate(table, id, body, auth) {
-  const r = await q(`select * from "${table}" where id = $1`, [id])
+  const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   const existing = r.rows[0]
   if (!allowRow(RULES[table].update, existing, auth)) {
@@ -349,17 +386,15 @@ async function handleUpdate(table, id, body, auth) {
   const cols = COLUMNS.get(table)
 
   if (table === 'users' && body?.password) {
-    // 改密码：必须验证旧密码，两次新密码一致
-    const oldOk = body.oldPassword && bcrypt.compareSync(String(body.oldPassword), existing.password_hash ?? '')
-    if (!oldOk) throw new HttpErr(400, 'Validation failed.', { oldPassword: { message: '旧密码不正确' } })
-    if (String(body.password).length < 8) {
-      throw new HttpErr(400, 'Validation failed.', { password: { message: '密码至少 8 位' } })
-    }
-    if (body.passwordConfirm !== undefined && body.passwordConfirm !== body.password) {
+    // 改密码：zod 校验 + 旧密码验证 + 两次新密码一致
+    const parsed = vparse(PasswordChangeBody, body)
+    if (parsed.passwordConfirm !== parsed.password) {
       throw new HttpErr(400, 'Validation failed.', { passwordConfirm: { message: '两次输入的密码不一致' } })
     }
-    await q(`update users set password_hash = $1, updated = now() where id = $2`, [
-      bcrypt.hashSync(String(body.password), 10),
+    const oldOk = bcrypt.compareSync(parsed.oldPassword, existing.password_hash ?? '')
+    if (!oldOk) throw new HttpErr(400, 'Validation failed.', { oldPassword: { message: '旧密码不正确' } })
+    await q(`update ${tq('users')} set password_hash = $1, updated = now() where id = $2`, [
+      bcrypt.hashSync(parsed.password, 10),
       id,
     ])
   }
@@ -373,28 +408,28 @@ async function handleUpdate(table, id, body, auth) {
       sets.push(`"${c}" = $${values.length}`)
     }
     values.push(id)
-    await q(`update "${table}" set ${sets.join(', ')}, updated = now() where id = $${values.length}`, values)
+    await q(`update ${tq(table)} set ${sets.join(', ')}, updated = now() where id = $${values.length}`, values)
   }
-  const after = await q(`select * from "${table}" where id = $1`, [id])
+  const after = await q(`select * from ${tq(table)} where id = $1`, [id])
   return toRecord(table, after.rows[0])
 }
 
 async function handleDelete(table, id, auth) {
-  const r = await q(`select * from "${table}" where id = $1`, [id])
+  const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   if (!allowRow(RULES[table].delete, r.rows[0], auth)) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
   }
-  await q(`delete from "${table}" where id = $1`, [id])
+  await q(`delete from ${tq(table)} where id = $1`, [id])
   return null // 204
 }
 
 async function handleAuthWithPassword(body) {
-  const identity = String(body?.identity ?? '').trim().toLowerCase()
-  const password = String(body?.password ?? '')
-  const r = await q(`select * from users where lower(email) = $1`, [identity])
+  const parsed = vparse(AuthBody, body)
+  const identity = parsed.identity.toLowerCase()
+  const r = await q(`select * from ${tq('users')} where lower(email) = $1`, [identity])
   const user = r.rows[0]
-  if (!user || !user.password_hash || !bcrypt.compareSync(password, user.password_hash)) {
+  if (!user || !user.password_hash || !bcrypt.compareSync(parsed.password, user.password_hash)) {
     throw new HttpErr(400, 'Failed to authenticate.')
   }
   const token = signToken({
@@ -410,7 +445,7 @@ async function handleAuthWithPassword(body) {
 
 async function handleAuthRefresh(auth) {
   needAuth(auth)
-  const r = await q(`select * from users where id = $1`, [auth.id])
+  const r = await q(`select * from ${tq('users')} where id = $1`, [auth.id])
   if (!r.rows[0]) throw new HttpErr(400, 'Failed to authenticate.')
   const token = signToken({
     id: auth.id,
@@ -517,7 +552,7 @@ async function main() {
   await loadColumns()
   await loadSecret()
   const tables = [...COLUMNS.keys()].filter((t) => RULES[t])
-  console.log(`Neon 网关就绪：${tables.length} 张业务表，端口 ${PORT}`)
+  console.log(`Neon 网关就绪：${tables.length} 张业务表，schema ${SCHEMA}，端口 ${PORT}`)
   server.listen(PORT, '0.0.0.0')
 }
 
