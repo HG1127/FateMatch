@@ -31,8 +31,11 @@ export default async function globalSetup() {
   await client.connect()
   await client.query(`drop schema if exists ${SCHEMA} cascade`)
   await client.query(`create schema ${SCHEMA}`)
-  await client.query(`set search_path to ${SCHEMA}`)
+  // 连接池为事务模式：search_path 只用事务级设置，避免会话设置泄漏到其他连接
+  await client.query('begin')
+  await client.query(`select set_config('search_path', '${SCHEMA}', true)`)
   await client.query(ddl)
+  await client.query('commit')
   await client.end()
 
   const gw = spawn('node', ['server/neon-gateway.mjs'], {
