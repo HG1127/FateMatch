@@ -574,6 +574,108 @@ test.describe('后端能力补齐', () => {
   })
 })
 
+test.describe('账号生命周期与附件', () => {
+  const ADMIN_EMAIL = 'admin@smoke.test'
+  const ADMIN_PASS = 'Admin#2026x'
+  const ADMIN_ID = 'e2eadmin0000001'
+
+  test('改密后旧令牌即时失效；上传端点鉴权、读取与类型校验', async ({ request }) => {
+    test.setTimeout(180_000)
+    const stamp = Date.now()
+    const mail = `life-${stamp}@smoke.test`
+    const reg = await request.post('/api/collections/users/records', {
+      data: { email: mail, password: PASS, passwordConfirm: PASS, name: '周期员' },
+    })
+    expect(reg.status()).toBe(200)
+    const login1 = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })).json()
+    const H1 = { Authorization: login1.token }
+    const myId = login1.record.id
+
+    // 上传：匿名被拒；登录成员拿到不可猜测 URL；GET 可读；非图片类型被拒
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const anonUp = await request.post('/api/uploads', { data: { image: png } })
+    expect(anonUp.status()).toBe(403)
+    const up = await request.post('/api/uploads', { headers: H1, data: { image: png } })
+    expect(up.status()).toBe(200)
+    const upBody = await up.json()
+    expect(upBody.url).toMatch(/^\/api\/uploads\/[a-z0-9]+-[a-f0-9]{24}\.png$/)
+    const fetched = await request.get(upBody.url)
+    expect(fetched.status()).toBe(200)
+    expect(fetched.headers()['content-type']).toBe('image/png')
+    const badType = await request.post('/api/uploads', { headers: H1, data: { image: 'data:text/html;base64,PGI+eDwvYj4=' } })
+    expect(badType.status()).toBe(400)
+    // 路径穿越被拒
+    const traversal = await request.get('/api/uploads/..%2F..%2Fpackage.json')
+    expect(traversal.status()).toBe(404)
+
+    // 改密：旧令牌即时 401，新密码登录照常
+    const chg = await request.patch(`/api/collections/users/records/${myId}`, {
+      headers: H1,
+      data: { oldPassword: PASS, password: 'NewLife#2026', passwordConfirm: 'NewLife#2026' },
+    })
+    expect(chg.status()).toBe(200)
+    const stale = await request.get('/api/collections/favorites/records', { headers: H1 })
+    expect(stale.status()).toBe(401)
+    const login2 = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: 'NewLife#2026' } })).json()
+    const H2 = { Authorization: login2.token }
+    expect((await request.get('/api/collections/favorites/records', { headers: H2 })).status()).toBe(200)
+
+    // 清理
+    expect((await request.delete(`/api/collections/users/records/${myId}`, { headers: H2 })).status()).toBe(204)
+  })
+
+  test('注销账号级联清理本人数据，双方共有的会话保留', async ({ request }) => {
+    test.setTimeout(180_000)
+    const stamp = Date.now()
+    const mail = `gone-${stamp}@smoke.test`
+    const reg = await request.post('/api/collections/users/records', {
+      data: { email: mail, password: PASS, passwordConfirm: PASS, name: '注销员' },
+    })
+    expect(reg.status()).toBe(200)
+    const login = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })).json()
+    const H = { Authorization: login.token }
+    const eId = login.record.id
+    const adminLogin = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: ADMIN_EMAIL, password: ADMIN_PASS } })).json()
+    const HAdmin = { Authorization: adminLogin.token }
+
+    // 注销前铺满各类本人数据
+    const postSid = `life-p-${stamp}`
+    const evSid = `life-e-${stamp}`
+    expect((await request.post('/api/collections/profiles/records', { headers: H, data: { sid: eId, nickname: '注销员' } })).status()).toBe(200)
+    expect((await request.post('/api/collections/posts/records', { headers: H, data: { sid: postSid, author_sid: eId, text: '告别前的分享', images: [], topic: '', featured: false, at: stamp } })).status()).toBe(200)
+    expect((await request.post('/api/collections/events/records', { headers: H, data: { sid: evSid, title: '告别活动', city: '杭州', region: '', cover: '', date: '2026-10-01', time: '19:00', capacity: 5, desc: '', tags: [], host: '注销员', creator_sid: eId, requirements: '', pinned: false, images: [] } })).status()).toBe(200)
+    expect((await request.post('/api/collections/event_attendees/records', { headers: H, data: { sid: `${evSid}:${eId}`, event_sid: evSid, owner_sid: eId } })).status()).toBe(200)
+    expect((await request.post('/api/collections/content_likes/records', { headers: H, data: { sid: `post:${postSid}:${eId}`, kind: 'post', target_sid: postSid, owner_sid: eId } })).status()).toBe(200)
+    expect((await request.post('/api/collections/favorites/records', { headers: H, data: { sid: `${eId}:posts:${postSid}`, owner_sid: eId, fav_type: 'posts', target_sid: postSid, group_name: '' } })).status()).toBe(200)
+    const chatSid = `life-m-${stamp}`
+    expect((await request.post('/api/collections/chat_messages/records', { headers: H, data: { sid: chatSid, sid_a: eId, sid_b: ADMIN_ID, from_sid: eId, text: '掌柜你好', images: [], recalled: false, read_at: 0, at: stamp } })).status()).toBe(200)
+
+    // 注销本人账号
+    expect((await request.delete(`/api/collections/users/records/${eId}`, { headers: H })).status()).toBe(204)
+
+    // 公开目录 / 名单不再残留本人数据
+    const posts = await (await request.get('/api/collections/posts/records?perPage=500')).json()
+    expect(posts.items.some((i: { sid: string }) => i.sid === postSid)).toBe(false)
+    const profiles = await (await request.get('/api/collections/profiles/records?perPage=500')).json()
+    expect(profiles.items.some((i: { sid: string }) => i.sid === eId)).toBe(false)
+    const events = await (await request.get('/api/collections/events/records?perPage=500')).json()
+    expect(events.items.some((i: { sid: string }) => i.sid === evSid)).toBe(false)
+    const attendees = await (await request.get('/api/collections/event_attendees/records?perPage=500')).json()
+    expect(attendees.items.some((i: { owner_sid: string }) => i.owner_sid === eId)).toBe(false)
+    const likes = await (await request.get('/api/collections/content_likes/records?perPage=500')).json()
+    expect(likes.items.some((i: { owner_sid: string }) => i.owner_sid === eId)).toBe(false)
+
+    // 掌柜视角：私密收藏行已清；双方共有的会话消息保留（对方侧仍可查）
+    const favs = await (await request.get('/api/collections/favorites/records?perPage=500', { headers: HAdmin })).json()
+    expect(favs.items.some((i: { owner_sid: string }) => i.owner_sid === eId)).toBe(false)
+    const chats = await (await request.get('/api/collections/chat_messages/records?perPage=500', { headers: HAdmin })).json()
+    expect(chats.items.some((i: { sid: string }) => i.sid === chatSid)).toBe(true)
+
+    // 已注销账号的旧令牌按匿名处理（私有表 403）
+    expect((await request.get('/api/collections/favorites/records', { headers: H })).status()).toBe(403)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })

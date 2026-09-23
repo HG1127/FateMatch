@@ -6,6 +6,7 @@ import { ageOf, completeness, useStore } from '@/lib/store'
 import type { User } from '@/lib/store'
 import { regionOf } from '@/lib/region'
 import { changeAccountPassword } from '@/lib/repo'
+import { logoutLocalAccount } from '@/lib/localAuth'
 import { yuanLevel } from '@/lib/badges'
 import { VerifyBadges, LevelSeal, AvatarFrame, NickName } from '@/components/ui'
 import { PhotoManager } from '@/components/me/PhotoManager'
@@ -190,11 +191,13 @@ export function MePage() {
                         setPwdBusy(true)
                         changeAccountPassword(oldPwd, newPwd)
                           .then(() => {
-                            toast.success('密码已修改,下次登录请用新密码')
+                            toast.success('密码已修改,请用新密码重新登录')
                             setPwdOpen(false)
                             setOldPwd('')
                             setNewPwd('')
                             setNewPwd2('')
+                            // v1.8: 改密后旧令牌即时失效, 留出提示时间后登出引导重新登录
+                            setTimeout(() => logoutLocalAccount(), 1200)
                           })
                           .catch((e: unknown) => {
                             const raw = e instanceof Error ? e.message : String(e)

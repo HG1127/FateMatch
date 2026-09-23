@@ -10,6 +10,8 @@
 // 入参校验用 zod 代码化（注册 / 登录 / 改密）。
 import http from 'node:http'
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
@@ -240,6 +242,13 @@ function signToken(payload) {
   return `${head}.${body}.${sig}`
 }
 
+/**
+ * 密码指纹（v1.8）：HMAC(会话密钥, 密码哈希) 前 12 位，随令牌下发。
+ * 改密 / 掌柜重置后指纹即变，旧令牌全部失效；HMAC 形式不暴露哈希本体。
+ */
+const pwFingerprint = (hash) =>
+  crypto.createHmac('sha256', JWT_SECRET).update(String(hash ?? '')).digest('hex').slice(0, 12)
+
 function verifyToken(token) {
   try {
     const [head, body, sig] = String(token).split('.')
@@ -396,16 +405,26 @@ function castParam(colType, v) {
   return v
 }
 
-/** 当前请求的登录态：{ id, role } 或 null（已停用账号直接拒绝，v1.6 服务端强制） */
+/** 当前请求的登录态：{ id, role } 或 null（停用即拒 v1.6；改密后旧令牌失效、注销账号令牌作废 v1.8） */
 async function resolveAuth(req) {
   const raw = req.headers['authorization'] || req.headers['x-pb-auth'] || ''
   const token = String(raw).replace(/^Bearer\s+/i, '').trim()
   if (!token) return null
   const payload = verifyToken(token)
   if (!payload?.id) return null
-  const r = await q(`select role, banned from ${tq('profiles')} where sid = $1 limit 1`, [payload.id])
-  if (r.rows[0]?.banned) throw new HttpErr(403, '账号已停用，如有疑问请联系掌柜')
-  return { id: payload.id, role: r.rows[0]?.role === 'admin' ? 'admin' : undefined }
+  const r = await q(
+    `select u.password_hash, p.role, p.banned
+     from ${tq('users')} u left join ${tq('profiles')} p on p.sid = u.id
+     where u.id = $1 limit 1`,
+    [payload.id],
+  )
+  if (!r.rows[0]) return null // 账号已注销：令牌作废，按匿名处理
+  if (r.rows[0].banned) throw new HttpErr(403, '账号已停用，如有疑问请联系掌柜')
+  // 密码指纹校验：v1.8 前的旧令牌无 pv 字段，过渡期放行（≤14 天自然到期）
+  if (payload.pv && payload.pv !== pwFingerprint(r.rows[0].password_hash)) {
+    throw new HttpErr(401, '密码已变更，请重新登录')
+  }
+  return { id: payload.id, role: r.rows[0].role === 'admin' ? 'admin' : undefined }
 }
 
 function needAuth(auth) {
@@ -655,8 +674,59 @@ async function handleDelete(table, id, auth) {
   if (!(await allowRow(RULES[table].delete, r.rows[0], auth))) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
   }
+  if (table === 'users') {
+    await cascadeUserDelete(id)
+    return null // 204
+  }
   await q(`delete from ${tq(table)} where id = $1`, [id])
   return null // 204
+}
+
+/**
+ * 注销级联（v1.8）：删号即在同一事务内清理本人资料与内容，公开目录不再残留「幽灵会员」。
+ * 他人拥有的行（对方侧的会话消息、他人对我的点赞 / 拉黑等）保留，界面按「已注销会员」渲染。
+ */
+async function cascadeUserDelete(id) {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const sids = async (table, field) =>
+      (await client.query(`select sid from ${tq(table)} where "${field}" = $1`, [id])).rows.map((x) => x.sid)
+    const postSids = await sids('posts', 'author_sid')
+    const pcSids = await sids('post_comments', 'author_sid')
+    const evSids = await sids('events', 'creator_sid')
+    const ecSids = await sids('event_comments', 'author_sid')
+    // 点赞：我点出的 + 落在我内容上的
+    await client.query(`delete from ${tq('content_likes')} where owner_sid = $1 or target_sid = any($2::text[])`, [id, [...postSids, ...pcSids, ...ecSids]])
+    // 我发起的活动及其附属数据（报名 / 签到 / 名片 / 留言）
+    await client.query(`delete from ${tq('event_attendees')} where owner_sid = $1 or event_sid = any($2::text[])`, [id, evSids])
+    await client.query(`delete from ${tq('checkins')} where owner_sid = $1 or event_sid = any($2::text[])`, [id, evSids])
+    await client.query(`delete from ${tq('contacts')} where user_sid = $1 or event_sid = any($2::text[])`, [id, evSids])
+    await client.query(`delete from ${tq('event_comments')} where author_sid = $1 or event_sid = any($2::text[])`, [id, evSids])
+    await client.query(`delete from ${tq('events')} where creator_sid = $1`, [id])
+    // 我的动态及其下的评论（含他人写在我帖子下的）
+    await client.query(`delete from ${tq('post_comments')} where author_sid = $1 or post_sid = any($2::text[])`, [id, postSids])
+    await client.query(`delete from ${tq('posts')} where author_sid = $1`, [id])
+    // 私密行：收藏 / 分组 / 拉黑 / 提醒 / 已读 / 跳过 / 心动 / 引导 / 举报 / 我的走访
+    for (const [t, f] of [
+      ['favorites', 'owner_sid'], ['fav_groups', 'owner_sid'], ['blocks', 'owner_sid'],
+      ['reminders', 'owner_sid'], ['user_reads', 'owner_sid'], ['user_passes', 'owner_sid'],
+      ['user_likes', 'owner_sid'], ['user_tour', 'owner_sid'], ['reports', 'by_sid'],
+      ['visits', 'viewer_sid'],
+    ]) {
+      await client.query(`delete from ${tq(t)} where "${f}" = $1`, [id])
+    }
+    await client.query(`delete from ${tq('profiles')} where sid = $1`, [id])
+    // chat_messages 保留：会话是双方共有记录，对方侧仍需可读
+    await client.query(`delete from ${tq('users')} where id = $1`, [id])
+    await client.query('commit')
+    console.log(`account-cascade-delete: ${id}`)
+  } catch (e) {
+    try { await client.query('rollback') } catch { /* 已断开 */ }
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 async function handleAuthWithPassword(body, ip) {
@@ -679,6 +749,7 @@ async function handleAuthWithPassword(body, ip) {
     collectionId: colIdOf('users'),
     collectionName: 'users',
     refreshable: true,
+    pv: pwFingerprint(user.password_hash),
     exp: Math.floor(Date.now() / 1000) + 14 * 86400,
   })
   return { token, record: toRecord('users', user) }
@@ -694,6 +765,7 @@ async function handleAuthRefresh(auth) {
     collectionId: colIdOf('users'),
     collectionName: 'users',
     refreshable: true,
+    pv: pwFingerprint(r.rows[0].password_hash),
     exp: Math.floor(Date.now() / 1000) + 14 * 86400,
   })
   return { token, record: toRecord('users', r.rows[0]) }
@@ -728,6 +800,46 @@ async function handleAdminResetPassword(idOrEmail, auth) {
   await q(`update ${tq('users')} set password_hash = $1, updated = now() where id = $2`, [bcrypt.hashSync(temp, 10), user.id])
   console.log(`admin-reset-password: target=${user.id} by=${auth.id}`)
   return { tempPassword: temp }
+}
+
+// ---------- v1.8 图片上传（附件落盘，不再以 dataURL 挤占数据库与同步载荷） ----------
+
+const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
+const UPLOAD_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' }
+const UPLOAD_MAX_BYTES = 8e6 // 解码后上限；前端已压缩到最长边 600–900 的 JPEG，正常 <400KB
+
+/** 登录成员上传：dataURL -> 落盘文件，返回不可猜测的访问路径（凭 URL 访问语义） */
+async function handleUpload(body, auth) {
+  needAuth(auth)
+  const data = String(body?.image ?? '')
+  const m = data.match(/^data:([a-z/+-]+);base64,([A-Za-z0-9+/=\s]+)$/i)
+  const ext = m ? UPLOAD_TYPES[m[1].toLowerCase()] : null
+  if (!ext) throw new HttpErr(400, 'Validation failed.', { image: { message: '仅支持 jpeg / png / webp / gif 图片' } })
+  const buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64')
+  if (!buf.length) throw new HttpErr(400, 'Validation failed.', { image: { message: '图片内容为空' } })
+  if (buf.length > UPLOAD_MAX_BYTES) throw new HttpErr(413, '图片过大（上限 8MB）')
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+  const name = `${Date.now().toString(36)}-${crypto.randomBytes(12).toString('hex')}${ext}`
+  await fs.promises.writeFile(path.join(UPLOAD_DIR, name), buf)
+  return { url: `/api/uploads/${name}`, bytes: buf.length }
+}
+
+/** 读上传文件：文件名只允许本脚本生成的形态，杜绝路径穿越 */
+function handleUploadRead(name, res) {
+  if (!/^[a-z0-9]+-[a-f0-9]{24}\.(jpg|png|webp|gif)$/.test(name)) {
+    throw new HttpErr(404, 'The requested resource wasn\'t found.')
+  }
+  const fp = path.join(UPLOAD_DIR, name)
+  if (!fs.existsSync(fp)) throw new HttpErr(404, 'The requested resource wasn\'t found.')
+  const type = { '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' }[path.extname(name)]
+  const size = fs.statSync(fp).size
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Length': size,
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Access-Control-Allow-Origin': '*',
+  })
+  fs.createReadStream(fp).pipe(res)
 }
 
 // ---------- HTTP 层 ----------
@@ -816,6 +928,16 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, out)
     }
 
+    // 图片上传（登录成员）与读取（文件名不可猜测，凭 URL 访问）
+    if ((path === '/api/uploads' || path === '/api/uploads/') && req.method === 'POST') {
+      return send(res, 200, await handleUpload(await readBody(req), auth))
+    }
+    m = path.match(/^\/api\/uploads\/([^/]+)$/)
+    if (m && req.method === 'GET') {
+      handleUploadRead(decodeURIComponent(m[1]), res)
+      return
+    }
+
     // 记录接口
     m = path.match(/^\/api\/collections\/([^/]+)\/records(?:\/([^/]+))?\/?$/)
     if (m) {
@@ -827,8 +949,8 @@ const server = http.createServer(async (req, res) => {
       if (!id && req.method === 'GET') return send(res, 200, await handleList(table, url, req, auth))
       if (id && req.method === 'GET') return send(res, 200, await handleViewOne(table, id, auth))
       if (!id && req.method === 'POST') {
-        // 注册限流：单 IP 每小时上限，防批量灌号
-        if (table === 'users') rateGate(`r:${ip}`, 20, 3_600_000, '注册尝试过多，请稍后再试')
+        // 注册限流：单 IP 每小时上限，防批量灌号（预览代理可能全站共享出口 IP，留足真实注册余量）
+        if (table === 'users') rateGate(`r:${ip}`, 50, 3_600_000, '注册尝试过多，请稍后再试')
         return send(res, 200, await handleCreate(table, await readBody(req), auth))
       }
       if (id && (req.method === 'PATCH' || req.method === 'PUT')) {

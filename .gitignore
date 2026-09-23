@@ -15,6 +15,8 @@ dist-ssr
 # 数据备份含哈希与个人信息, 附件含个人照片, 均不入库
 backups
 project/.rh_attachments
+# 会员上传的图片附件(v1.8 起落盘存储), 含个人照片, 不入 git
+uploads
 
 # Editor directories and files
 .vscode/*

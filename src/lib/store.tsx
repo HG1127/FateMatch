@@ -6,6 +6,7 @@ import { ALL_CITIES, districtOf } from './region'
 import { getLocalAccount, onLocalAccountChange, logoutLocalAccount } from './localAuth'
 import type { LocalAccount } from './localAuth'
 import { loadWorld, syncWorld, bumpDigestView, adminResetPassword } from './repo'
+import { uploadImage } from './upload'
 import type { FestTemplate } from './festivals'
 
 export type Gender = 'male' | 'female'
@@ -613,6 +614,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // 服务端封禁强制(v1.6):被停用账号的会话直接登出并告知原因
           logoutLocalAccount()
           toast.error('该账号已被停用,如有疑问请联系掌柜')
+        } else if (msg.includes('请重新登录')) {
+          // 改密/重置后旧令牌即时失效(v1.8):登出并引导重新登录
+          logoutLocalAccount()
+          toast.error('登录状态已失效,请重新登录')
         } else if (alive) {
           toast.error('数据库连接失败,当前展示临时数据,稍后可刷新重试')
         }
@@ -1245,9 +1250,9 @@ export function useStore(): Store {
   return s
 }
 
-/** 读取图片并压缩为 dataURL, 控制本地存储体积 */
+/** 读取图片并压缩; v1.8 起优先上传落盘换 URL(数据库不再存大体积 dataURL), 失败回退内联 */
 export function readImageFile(file: File, max = 900): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('read fail'))
     reader.onload = () => {
@@ -1266,5 +1271,11 @@ export function readImageFile(file: File, max = 900): Promise<string> {
       img.src = String(reader.result)
     }
     reader.readAsDataURL(file)
+  }).then(async dataUrl => {
+    try {
+      return await uploadImage(dataUrl)
+    } catch {
+      return dataUrl
+    }
   })
 }
