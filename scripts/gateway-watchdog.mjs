@@ -128,8 +128,8 @@ async function pollHealth() {
 const BACKUP_HOUR = 4
 const BACKUP_MIN = 30
 
-function runBackup(why) {
-  log(`备份开始（${why}）`)
+function runScript(script, label) {
+  log(`${label}：开始`)
   const out = fs.openSync(WD_LOG, 'a')
   let closed = false
   const closeOut = () => {
@@ -138,19 +138,23 @@ function runBackup(why) {
     try { fs.closeSync(out) } catch { /* 已关闭 */ }
   }
   // 连接串只经环境变量传给子进程，不落盘
-  const b = spawn('node', ['scripts/neon-backup.mjs'], {
+  const b = spawn('node', [script], {
     cwd: ROOT,
     env: { ...process.env, NEON_DSN: dsn },
     stdio: ['ignore', out, out],
   })
   b.on('exit', (code) => {
     closeOut()
-    if (!stopping) log(code === 0 ? '备份完成' : `备份失败 code=${code}（下个调度点或重启补跑会重试）`)
+    if (!stopping) log(code === 0 ? `${label}：完成` : `${label}：失败 code=${code}`)
   })
   b.on('error', (e) => {
     closeOut()
-    log(`备份失败：${e.message}`)
+    log(`${label}：失败 ${e.message}`)
   })
+}
+
+function runBackup(why) {
+  runScript('scripts/neon-backup.mjs', `备份（${why}）`)
 }
 
 function msUntilNextBackup() {
@@ -176,6 +180,28 @@ function todayBackupDone() {
   } catch {
     return false
   }
+}
+
+// ---------- 每周恢复演练（v1.10）：周日 04:35（错开每日备份），验证「备份真的能恢复」 ----------
+
+const DRILL_DAY = 0 // 周日
+
+function msUntilNextDrill() {
+  const now = new Date()
+  const next = new Date(now)
+  next.setHours(BACKUP_HOUR, BACKUP_MIN + 5, 0, 0)
+  const delta = (DRILL_DAY - next.getDay() + 7) % 7
+  next.setDate(next.getDate() + delta)
+  if (next <= now) next.setDate(next.getDate() + 7)
+  return next.getTime() - now.getTime()
+}
+
+function scheduleDrill() {
+  if (stopping) return
+  setTimeout(() => {
+    runScript('scripts/neon-backup-drill.mjs', '恢复演练（每周）')
+    scheduleDrill()
+  }, msUntilNextDrill())
 }
 
 // ---------- 启动流程 ----------
@@ -228,8 +254,10 @@ async function main() {
   const now = new Date()
   const pastDue = now.getHours() > BACKUP_HOUR || (now.getHours() === BACKUP_HOUR && now.getMinutes() >= BACKUP_MIN)
   if (pastDue && !todayBackupDone()) setTimeout(() => runBackup('启动补跑'), 30_000)
+  // 每周恢复演练（周日 04:35）
+  scheduleDrill()
 
-  log(`看门狗就绪：健康检查 ${HEALTH_URL} 每 ${POLL_MS / 1000}s 轮询；每日 ${BACKUP_HOUR}:${String(BACKUP_MIN).padStart(2, '0')} 自动备份（保留 7 份，启动补跑当日）`)
+  log(`看门狗就绪：健康检查 ${HEALTH_URL} 每 ${POLL_MS / 1000}s 轮询；每日 ${BACKUP_HOUR}:${String(BACKUP_MIN).padStart(2, '0')} 自动备份（保留 7 份，启动补跑当日）；每周日恢复演练`)
 }
 
 main().catch((e) => {

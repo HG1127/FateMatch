@@ -511,6 +511,17 @@ test.describe('后端能力补齐', () => {
     // 停用：掌柜标记后登录被拒、旧令牌全拒；恢复后照常
     const adminLogin = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: ADMIN_EMAIL, password: ADMIN_PASS } })).json()
     const HAdmin = { Authorization: adminLogin.token }
+
+    // 举报处置权（v1.10 收紧）：举报行仅掌柜可改，成员（含被举报人）改被拒
+    const rpSid = `rp-${stamp}`
+    expect((await request.post('/api/collections/reports/records', { headers: HA, data: { sid: rpSid, by_sid: aId, target_sid: bId, reason: '骚扰', note: '', status: 'open', at: stamp } })).status()).toBe(200)
+    const rpList = await (await request.get('/api/collections/reports/records', { headers: HA })).json()
+    const rpId = rpList.items.find((i: { sid: string }) => i.sid === rpSid).id
+    const rpPatchByMember = await request.patch(`/api/collections/reports/records/${rpId}`, { headers: HB, data: { status: 'done' } })
+    expect(rpPatchByMember.status()).toBe(403)
+    const rpPatchByAdmin = await request.patch(`/api/collections/reports/records/${rpId}`, { headers: HAdmin, data: { status: 'done' } })
+    expect(rpPatchByAdmin.status()).toBe(200)
+
     const ban = await request.patch(`/api/collections/profiles/records/${profBId}`, { headers: HAdmin, data: { banned: true } })
     expect(ban.status()).toBe(200)
     const loginBanned = await request.post('/api/collections/users/auth-with-password', { data: { identity: mailB, password: PASS } })
@@ -620,8 +631,19 @@ test.describe('账号生命周期与附件', () => {
     const H2 = { Authorization: login2.token }
     expect((await request.get('/api/collections/favorites/records', { headers: H2 })).status()).toBe(200)
 
-    // 清理
-    expect((await request.delete(`/api/collections/users/records/${myId}`, { headers: H2 })).status()).toBe(204)
+    // 改邮箱（v1.10 服务端校验）：格式非法与被占用都拒，合法修改后用新邮箱登录
+    const badEmail = await request.patch(`/api/collections/users/records/${myId}`, { headers: H2, data: { email: 'not-an-email' } })
+    expect(badEmail.status()).toBe(400)
+    expect((await badEmail.json()).data.email.message).toBeTruthy()
+    const dupEmail = await request.patch(`/api/collections/users/records/${myId}`, { headers: H2, data: { email: ADMIN_EMAIL } })
+    expect(dupEmail.status()).toBe(400)
+    const mail2 = `life2-${stamp}@smoke.test`
+    expect((await request.patch(`/api/collections/users/records/${myId}`, { headers: H2, data: { email: mail2 } })).status()).toBe(200)
+    const login3 = await request.post('/api/collections/users/auth-with-password', { data: { identity: mail2, password: 'NewLife#2026' } })
+    expect(login3.status()).toBe(200)
+
+    // 清理（用改邮箱后的新令牌）
+    expect((await request.delete(`/api/collections/users/records/${myId}`, { headers: { Authorization: (await login3.json()).token } })).status()).toBe(204)
   })
 
   test('注销账号级联清理本人数据，双方共有的会话保留', async ({ request }) => {
@@ -641,9 +663,15 @@ test.describe('账号生命周期与附件', () => {
     // 注销前铺满各类本人数据
     const postSid = `life-p-${stamp}`
     const evSid = `life-e-${stamp}`
+    const cSid = `life-c-${stamp}`
     expect((await request.post('/api/collections/profiles/records', { headers: H, data: { sid: eId, nickname: '注销员' } })).status()).toBe(200)
-    expect((await request.post('/api/collections/posts/records', { headers: H, data: { sid: postSid, author_sid: eId, text: '告别前的分享', images: [], topic: '', featured: false, at: stamp } })).status()).toBe(200)
-    expect((await request.post('/api/collections/events/records', { headers: H, data: { sid: evSid, title: '告别活动', city: '杭州', region: '', cover: '', date: '2026-10-01', time: '19:00', capacity: 5, desc: '', tags: [], host: '注销员', creator_sid: eId, requirements: '', pinned: false, images: [] } })).status()).toBe(200)
+    const postRes = await request.post('/api/collections/posts/records', { headers: H, data: { sid: postSid, author_sid: eId, text: '告别前的分享', images: [], topic: '', featured: false, at: stamp } })
+    expect(postRes.status()).toBe(200)
+    const postId = (await postRes.json()).id
+    expect((await request.post('/api/collections/post_comments/records', { headers: H, data: { sid: cSid, post_sid: postSid, author_sid: eId, text: '自己占一楼', at: stamp } })).status()).toBe(200)
+    const evRes = await request.post('/api/collections/events/records', { headers: H, data: { sid: evSid, title: '告别活动', city: '杭州', region: '', cover: '', date: '2026-10-01', time: '19:00', capacity: 5, desc: '', tags: [], host: '注销员', creator_sid: eId, requirements: '', pinned: false, images: [] } })
+    expect(evRes.status()).toBe(200)
+    const evId = (await evRes.json()).id
     expect((await request.post('/api/collections/event_attendees/records', { headers: H, data: { sid: `${evSid}:${eId}`, event_sid: evSid, owner_sid: eId } })).status()).toBe(200)
     expect((await request.post('/api/collections/content_likes/records', { headers: H, data: { sid: `post:${postSid}:${eId}`, kind: 'post', target_sid: postSid, owner_sid: eId } })).status()).toBe(200)
     expect((await request.post('/api/collections/favorites/records', { headers: H, data: { sid: `${eId}:posts:${postSid}`, owner_sid: eId, fav_type: 'posts', target_sid: postSid, group_name: '' } })).status()).toBe(200)
@@ -658,6 +686,20 @@ test.describe('账号生命周期与附件', () => {
     const metBody = await met.json()
     expect(metBody.data.requests).toBeGreaterThan(0)
     expect(metBody.data.uptimeSec).toBeGreaterThanOrEqual(0)
+
+    // 内容删除级联（v1.10）：掌柜删帖 → 帖下评论与落在其上的点赞一并清掉
+    expect((await request.delete(`/api/collections/posts/records/${postId}`, { headers: HAdmin })).status()).toBe(204)
+    const postsAfter = await (await request.get('/api/collections/posts/records?perPage=500')).json()
+    expect(postsAfter.items.some((i: { sid: string }) => i.sid === postSid)).toBe(false)
+    const commentsAfter = await (await request.get('/api/collections/post_comments/records?perPage=500')).json()
+    expect(commentsAfter.items.some((i: { sid: string }) => i.sid === cSid)).toBe(false)
+    const likesAfter = await (await request.get('/api/collections/content_likes/records?perPage=500')).json()
+    expect(likesAfter.items.some((i: { sid: string }) => i.sid === `post:${postSid}:${eId}`)).toBe(false)
+
+    // 活动删除级联：发起人删自己的活动 → 报名行随之清掉
+    expect((await request.delete(`/api/collections/events/records/${evId}`, { headers: H })).status()).toBe(204)
+    const attAfter = await (await request.get('/api/collections/event_attendees/records?perPage=500')).json()
+    expect(attAfter.items.some((i: { event_sid: string }) => i.event_sid === evSid)).toBe(false)
 
     // 注销本人账号
     expect((await request.delete(`/api/collections/users/records/${eId}`, { headers: H })).status()).toBe(204)

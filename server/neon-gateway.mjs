@@ -212,7 +212,7 @@ const RULES = {
   reminders: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   checkins: { list: HOSTED, view: hostOrSelfRead('owner_sid'), create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   contacts: { list: HOSTED, view: hostOrSelfRead('user_sid'), create: [me('user_sid')], update: [me('user_sid')], delete: [me('user_sid'), ADMIN] },
-  reports: { list: [me('by_sid'), ADMIN], view: [me('by_sid'), ADMIN], create: [me('by_sid')], update: A, delete: ADMIN },
+  reports: { list: [me('by_sid'), ADMIN], view: [me('by_sid'), ADMIN], create: [me('by_sid')], update: ADMIN, delete: ADMIN },
   digests: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: ADMIN },
   content_likes: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
   event_attendees: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
@@ -674,6 +674,17 @@ async function handleUpdate(table, id, body, auth) {
     ])
   }
 
+  if (table === 'users' && body?.email != null) {
+    // 改邮箱（接口级路径，界面只读展示）：格式与唯一性校验对齐注册，并归一化为小写
+    const email = String(body.email).trim().toLowerCase()
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      throw new HttpErr(400, 'Validation failed.', { email: { message: '邮箱格式不正确' } })
+    }
+    const dup = await q(`select 1 from ${tq('users')} where lower(email) = $1 and id <> $2`, [email, id])
+    if (dup.rows[0]) throw new HttpErr(400, 'Validation failed.', { email: { message: '该邮箱已被使用' } })
+    body.email = email
+  }
+
   const data = bodyToCols(table, body, auth)
   if (data.size) {
     const sets = []
@@ -699,8 +710,49 @@ async function handleDelete(table, id, auth) {
     await cascadeUserDelete(id)
     return null // 204
   }
+  if (table === 'posts' || table === 'events') {
+    await cascadeContentDelete(table, r.rows[0])
+    return null // 204
+  }
   await q(`delete from ${tq(table)} where id = $1`, [id])
   return null // 204
+}
+
+/**
+ * 内容删除级联（v1.10）：删帖 / 删活动时在同一事务内清掉其附属行
+ * （评论、落在其上的点赞、报名 / 签到 / 名片），不再产生孤儿数据。
+ */
+async function cascadeContentDelete(table, row) {
+  const sid = String(row.sid ?? row.id)
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    if (table === 'posts') {
+      const cs = await client.query(`select sid from ${tq('post_comments')} where post_sid = $1`, [sid])
+      const cSids = cs.rows.map((x) => x.sid)
+      await client.query(
+        `delete from ${tq('content_likes')} where (kind = 'post' and target_sid = $1) or (kind = 'post_comment' and target_sid = any($2::text[]))`,
+        [sid, cSids],
+      )
+      await client.query(`delete from ${tq('post_comments')} where post_sid = $1`, [sid])
+    } else {
+      const cs = await client.query(`select sid from ${tq('event_comments')} where event_sid = $1`, [sid])
+      const cSids = cs.rows.map((x) => x.sid)
+      await client.query(`delete from ${tq('content_likes')} where kind = 'event_comment' and target_sid = any($1::text[])`, [cSids])
+      await client.query(`delete from ${tq('event_comments')} where event_sid = $1`, [sid])
+      await client.query(`delete from ${tq('event_attendees')} where event_sid = $1`, [sid])
+      await client.query(`delete from ${tq('checkins')} where event_sid = $1`, [sid])
+      await client.query(`delete from ${tq('contacts')} where event_sid = $1`, [sid])
+    }
+    await client.query(`delete from ${tq(table)} where id = $1`, [row.id])
+    await client.query('commit')
+    console.log(`content-cascade-delete: ${table}/${sid}`)
+  } catch (e) {
+    try { await client.query('rollback') } catch { /* 已断开 */ }
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 /**
