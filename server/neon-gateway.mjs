@@ -133,6 +133,23 @@ async function eventCommentWrite(row, auth) {
   return !!ev.rows[0] && String(ev.rows[0].creator_sid ?? '') === auth.id
 }
 
+/**
+ * 「本人 + 所属活动发起人 + 掌柜」的跨表读规则（checkins / contacts，v1.2 收紧）：
+ * 名片含联系方式、签到含行踪，此前任意登录成员可读全表；
+ * 现在仅本人行 + 自己发起的活动下的行 + 掌柜可见（与界面展示语义一致）。
+ */
+const hostOrSelfRead = (f) => async (row, auth) => {
+  if (!auth) return false
+  if (auth.role === 'admin') return true
+  if (String(row[f] ?? '') === auth.id) return true
+  const ev = await q(`select creator_sid from ${tq('events')} where sid = $1 limit 1`, [row.event_sid])
+  return !!ev.rows[0] && String(ev.rows[0].creator_sid ?? '') === auth.id
+}
+
+/** 列表范围的跨表变体：本人行 + 自己发起的活动下的行（掌柜不加限制） */
+const HOSTED = 'hosted'
+const HOSTED_FIELD = { checkins: 'owner_sid', contacts: 'user_sid' }
+
 const RULES = {
   users: { list: SELF, view: SELF, create: OPEN, update: SELF, delete: SELF },
   profiles: { list: OPEN, view: OPEN, create: A, update: [me('sid'), ADMIN], delete: ADMIN },
@@ -149,8 +166,8 @@ const RULES = {
   visits: { list: [me('viewer_sid'), me('viewed_sid'), ADMIN], view: [me('viewer_sid'), me('viewed_sid'), ADMIN], create: [me('viewer_sid')], update: [me('viewer_sid')], delete: [me('viewer_sid'), ADMIN] },
   blocks: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   reminders: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  checkins: { list: A, view: A, create: A, update: A, delete: A },
-  contacts: { list: A, view: A, create: [me('user_sid')], update: [me('user_sid')], delete: [me('user_sid'), ADMIN] },
+  checkins: { list: HOSTED, view: hostOrSelfRead('owner_sid'), create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  contacts: { list: HOSTED, view: hostOrSelfRead('user_sid'), create: [me('user_sid')], update: [me('user_sid')], delete: [me('user_sid'), ADMIN] },
   reports: { list: [me('by_sid'), ADMIN], view: [me('by_sid'), ADMIN], create: [me('by_sid')], update: A, delete: ADMIN },
   digests: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: ADMIN },
   content_likes: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
@@ -307,8 +324,8 @@ function allowCreate(rule, data, auth) {
   return false
 }
 
-/** 列表范围 -> WHERE 子句 */
-function scopeWhere(rule, auth) {
+/** 列表范围 -> WHERE 子句（HOSTED 需表名以定位属主字段） */
+function scopeWhere(rule, auth, table) {
   if (rule === OPEN) return null
   if (rule === A) { needAuth(auth); return null }
   if (rule === SELF) { needAuth(auth); return { sql: 'id = $1', params: [auth.id] } }
@@ -316,6 +333,16 @@ function scopeWhere(rule, auth) {
     needAuth(auth)
     if (auth.role === 'admin') return null
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
+  }
+  if (rule === HOSTED) {
+    needAuth(auth)
+    if (auth.role === 'admin') return null
+    const f = HOSTED_FIELD[table] ?? 'owner_sid'
+    // 本人行 + 自己发起的活动下的行（子查询与主表同 schema）
+    return {
+      sql: `("${f}" = $1 or "event_sid" in (select "sid" from ${tq('events')} where "creator_sid" = $1))`,
+      params: [auth.id],
+    }
   }
   if (Array.isArray(rule)) {
     needAuth(auth)
@@ -333,7 +360,7 @@ async function handleList(table, url, req, auth) {
   if (!cols) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   const page = Math.max(1, Number(url.searchParams.get('page') ?? 1))
   const perPage = Math.min(500, Math.max(1, Number(url.searchParams.get('perPage') ?? 30)))
-  const scope = scopeWhere(RULES[table].list, auth)
+  const scope = scopeWhere(RULES[table].list, auth, table)
   const where = scope ? `where ${scope.sql}` : ''
   const params = scope ? [...scope.params] : []
   const cnt = await q(`select count(*)::int n from ${tq(table)} ${where}`, params)
@@ -388,6 +415,50 @@ async function handleCreate(table, body, auth) {
        values ($1,$2,$3,$4,$5,false,false,now(),now())`,
       [id, email, hash, String(parsed.name ?? ''), ''],
     )
+  } else if (table === 'event_attendees') {
+    // v1.2 满员校验：锁活动行后在同一事务内数人数并插入，
+    // 直连接口并发抢最后一个名额时也不会超员（此前校验只在客户端）。
+    const names = ['id', ...data.keys()]
+    const values = [id, ...[...data.entries()].map(([c, v]) => castParam(cols.get(c), v))]
+    const ph = names.map((_, i) => `$${i + 1}`)
+    const quoted = names.map((n) => `"${n}"`)
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const evSid = String(data.get('event_sid') ?? '')
+      const ev = await client.query(`select capacity from ${tq('events')} where sid = $1 limit 1 for update`, [evSid])
+      const cap = Number(ev.rows[0]?.capacity ?? 0)
+      if (cap > 0) {
+        const cnt = await client.query(
+          `select count(*)::int n from ${tq('event_attendees')} where event_sid = $1 and owner_sid <> $2`,
+          [evSid, String(data.get('owner_sid') ?? '')],
+        )
+        if (cnt.rows[0].n >= cap) {
+          await client.query('rollback')
+          throw new HttpErr(400, 'Validation failed.', { capacity: { message: '活动已满员' } })
+        }
+      }
+      try {
+        await client.query(
+          `insert into ${tq(table)} (${quoted.join(',')}, created, updated) values (${ph.join(',')}, now(), now())`,
+          values,
+        )
+      } catch (e) {
+        // 多端并发重复报名同一行：幂等返回已存在记录
+        if (e?.code === '23505' && data.has('sid')) {
+          await client.query('rollback')
+          const ex = await q(`select * from ${tq(table)} where sid = $1`, [data.get('sid')])
+          if (ex.rows[0]) return toRecord(table, ex.rows[0])
+        }
+        throw e
+      }
+      await client.query('commit')
+    } catch (e) {
+      try { await client.query('rollback') } catch { /* 已回滚或连接断开 */ }
+      throw e
+    } finally {
+      client.release()
+    }
   } else {
     const names = ['id', ...data.keys()]
     const values = [id, ...[...data.entries()].map(([c, v]) => castParam(cols.get(c), v))]

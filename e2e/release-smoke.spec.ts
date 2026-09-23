@@ -252,6 +252,103 @@ test.describe('计数拆分与权限收紧', () => {
   })
 })
 
+test.describe('满员校验与跨行读收紧', () => {
+  test('报名满员被服务端拦截；名片/签到仅本人与发起人可读', async ({ request }) => {
+    test.setTimeout(180_000) // 请求数多且外网出口偶发抖动，放宽时限
+    const stamp = Date.now()
+    const reg = async (tag: string, name: string) => {
+      const mail = `${tag}-${stamp}@smoke.test`
+      const r = await request.post('/api/collections/users/records', {
+        data: { email: mail, password: PASS, passwordConfirm: PASS, name },
+      })
+      expect(r.status()).toBe(200)
+      const login = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })).json()
+      return { H: { Authorization: login.token }, id: login.record.id }
+    }
+    const host = await reg('cap-host', '主办丙')
+    const guest = await reg('cap-guest', '客丁')
+    const third = await reg('cap-third', '客戊')
+
+    // 容量 2 的活动：主办 + 1 名客人后满员
+    const evSid = `e2e-cap-${stamp}`
+    const ev = await request.post('/api/collections/events/records', {
+      headers: host.H,
+      data: { sid: evSid, title: '满员测试场', city: '杭州', region: '', cover: '', date: '2026-10-01', time: '19:00', capacity: 2, desc: '', tags: [], host: '丙', creator_sid: host.id, requirements: '', pinned: false, images: [] },
+    })
+    expect(ev.status()).toBe(200)
+    const joinHost = await request.post('/api/collections/event_attendees/records', {
+      headers: host.H,
+      data: { sid: `${evSid}:${host.id}`, event_sid: evSid, owner_sid: host.id },
+    })
+    expect(joinHost.status()).toBe(200)
+    const joinGuest = await request.post('/api/collections/event_attendees/records', {
+      headers: guest.H,
+      data: { sid: `${evSid}:${guest.id}`, event_sid: evSid, owner_sid: guest.id },
+    })
+    expect(joinGuest.status()).toBe(200)
+    // 第三个名额：服务端拦截（此前只在客户端校验，直连接口可超员）
+    const joinThird = await request.post('/api/collections/event_attendees/records', {
+      headers: third.H,
+      data: { sid: `${evSid}:${third.id}`, event_sid: evSid, owner_sid: third.id },
+    })
+    expect(joinThird.status()).toBe(400)
+    expect((await joinThird.json()).data.capacity.message).toBeTruthy()
+    // 已报名者重复提交幂等返回，不算新增
+    const rejoin = await request.post('/api/collections/event_attendees/records', {
+      headers: guest.H,
+      data: { sid: `${evSid}:${guest.id}`, event_sid: evSid, owner_sid: guest.id },
+    })
+    expect(rejoin.status()).toBe(200)
+    // 客人退订后名额释放
+    const leaveId = (await joinGuest.json()).id
+    expect((await request.delete(`/api/collections/event_attendees/records/${leaveId}`, { headers: guest.H })).status()).toBe(204)
+    const joinThirdRetry = await request.post('/api/collections/event_attendees/records', {
+      headers: third.H,
+      data: { sid: `${evSid}:${third.id}`, event_sid: evSid, owner_sid: third.id },
+    })
+    expect(joinThirdRetry.status()).toBe(200)
+
+    // 名片：客人留联系方式；无关成员的列表里看不到，发起人看得到
+    const contact = await request.post('/api/collections/contacts/records', {
+      headers: third.H,
+      data: { sid: `${evSid}:${third.id}`, event_sid: evSid, user_sid: third.id, text: 'wechat-123' },
+    })
+    expect(contact.status()).toBe(200)
+    const guestContacts = await request.get('/api/collections/contacts/records', { headers: guest.H })
+    expect(guestContacts.status()).toBe(200)
+    expect((await guestContacts.json()).items.some((i: { user_sid: string }) => i.user_sid === third.id)).toBe(false)
+    const hostContacts = await request.get('/api/collections/contacts/records', { headers: host.H })
+    expect((await hostContacts.json()).items.some((i: { user_sid: string }) => i.user_sid === third.id)).toBe(true)
+    // 冒充他人写名片被拒
+    const forgeContact = await request.post('/api/collections/contacts/records', {
+      headers: guest.H,
+      data: { sid: `${evSid}:${third.id}`, event_sid: evSid, user_sid: third.id, text: 'hacked' },
+    })
+    expect(forgeContact.status()).toBe(403)
+
+    // 签到：本人可写可读；无关成员列表不可见；冒充被拒
+    const ci = await request.post('/api/collections/checkins/records', {
+      headers: third.H,
+      data: { sid: `${third.id}:${evSid}`, owner_sid: third.id, event_sid: evSid },
+    })
+    expect(ci.status()).toBe(200)
+    const forgeCheckin = await request.post('/api/collections/checkins/records', {
+      headers: guest.H,
+      data: { sid: `${third.id}:${evSid}x`, owner_sid: third.id, event_sid: evSid },
+    })
+    expect(forgeCheckin.status()).toBe(403)
+    const guestCheckins = await request.get('/api/collections/checkins/records', { headers: guest.H })
+    expect((await guestCheckins.json()).items.some((i: { owner_sid: string }) => i.owner_sid === third.id)).toBe(false)
+    const hostCheckins = await request.get('/api/collections/checkins/records', { headers: host.H })
+    expect((await hostCheckins.json()).items.some((i: { owner_sid: string }) => i.owner_sid === third.id)).toBe(true)
+
+    // 清理
+    expect((await request.delete(`/api/collections/users/records/${host.id}`, { headers: host.H })).status()).toBe(204)
+    expect((await request.delete(`/api/collections/users/records/${guest.id}`, { headers: guest.H })).status()).toBe(204)
+    expect((await request.delete(`/api/collections/users/records/${third.id}`, { headers: third.H })).status()).toBe(204)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })
