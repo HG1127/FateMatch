@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   synced_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users ("email");
+-- 登录/查重走 lower(email) 等值匹配，普通索引帮不上，需函数索引
+CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower("email"));
 
 CREATE TABLE IF NOT EXISTS profiles (
   id text PRIMARY KEY,
@@ -134,6 +136,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_sid ON chat_messages ("sid");
 CREATE INDEX IF NOT EXISTS idx_chat_messages_from_sid ON chat_messages ("from_sid");
+-- 会话列表按 (sid_a = me or sid_b = me) 过滤，两列各自需要索引
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sid_a ON chat_messages ("sid_a");
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sid_b ON chat_messages ("sid_b");
 
 CREATE TABLE IF NOT EXISTS user_likes (
   id text PRIMARY KEY,

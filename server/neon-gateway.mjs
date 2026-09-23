@@ -261,6 +261,14 @@ function rateHit(key, limit, windowMs) {
   return b.n <= limit
 }
 
+/** 超限即记日志并抛 429（安全审计：限流命中留痕） */
+function rateGate(key, limit, windowMs, msg) {
+  if (!rateHit(key, limit, windowMs)) {
+    console.warn(`rate-limit: ${key}`)
+    throw new HttpErr(429, msg)
+  }
+}
+
 // 定期清理过期窗口，防 Map 无界增长
 setInterval(() => {
   const now = Date.now()
@@ -276,20 +284,24 @@ const AUTH_FAILS = new Map() // identity -> { n, lockUntil }
 const AUTH_FAIL_LIMIT = 8
 const AUTH_LOCK_MS = 15 * 60 * 1000
 
-function assertNotLocked(identity) {
+function assertNotLocked(identity, ip) {
   const rec = AUTH_FAILS.get(identity)
   if (rec && rec.lockUntil > Date.now()) {
     const mins = Math.ceil((rec.lockUntil - Date.now()) / 60000)
+    console.warn(`auth-locked-reject: ${identity} ip=${ip}`)
     throw new HttpErr(429, `密码错误次数过多，请 ${mins} 分钟后再试`)
   }
 }
 
-function noteAuthFail(identity) {
+function noteAuthFail(identity, ip) {
   const rec = AUTH_FAILS.get(identity) ?? { n: 0, lockUntil: 0 }
   rec.n += 1
   if (rec.n >= AUTH_FAIL_LIMIT) {
     rec.lockUntil = Date.now() + AUTH_LOCK_MS
     rec.n = 0
+    console.warn(`auth-lock: ${identity} ip=${ip} 锁定 ${AUTH_LOCK_MS / 60000} 分钟`)
+  } else {
+    console.warn(`auth-fail: ${identity} ip=${ip} n=${rec.n}`)
   }
   AUTH_FAILS.set(identity, rec)
   if (AUTH_FAILS.size > 1000) {
@@ -614,14 +626,14 @@ async function handleDelete(table, id, auth) {
   return null // 204
 }
 
-async function handleAuthWithPassword(body) {
+async function handleAuthWithPassword(body, ip) {
   const parsed = vparse(AuthBody, body)
   const identity = parsed.identity.toLowerCase()
-  assertNotLocked(identity)
+  assertNotLocked(identity, ip)
   const r = await q(`select * from ${tq('users')} where lower(email) = $1`, [identity])
   const user = r.rows[0]
   if (!user || !user.password_hash || !bcrypt.compareSync(parsed.password, user.password_hash)) {
-    noteAuthFail(identity)
+    noteAuthFail(identity, ip)
     throw new HttpErr(400, 'Failed to authenticate.')
   }
   AUTH_FAILS.delete(identity)
@@ -686,7 +698,10 @@ async function readBody(req) {
   let size = 0
   for await (const c of req) {
     size += c.length
-    if (size > 25e6) throw new HttpErr(413, 'Request entity too large.')
+    if (size > 25e6) {
+      console.warn(`oversize-body: ${req.url} >${size}B`)
+      throw new HttpErr(413, 'Request entity too large.')
+    }
     chunks.push(c)
   }
   if (!chunks.length) return {}
@@ -710,15 +725,15 @@ const server = http.createServer(async (req, res) => {
 
     // 全局限流：单 IP 固定窗口，防脚本刷爆网关（健康检查不计入）
     const ip = clientIp(req)
-    if (!rateHit(`g:${ip}`, 1200, 60_000)) throw new HttpErr(429, 'Too Many Requests.')
+    rateGate(`g:${ip}`, 1200, 60_000, 'Too Many Requests.')
 
     const auth = await resolveAuth(req)
 
     // 认证接口（另加单 IP 尝试频次限制，防爆破的第一道闸；身份级锁定见 handleAuthWithPassword）
     let m = path.match(/^\/api\/collections\/users\/auth-with-password\/?$/)
     if (m && req.method === 'POST') {
-      if (!rateHit(`a:${ip}`, 60, 600_000)) throw new HttpErr(429, '尝试次数过多，请稍后再试')
-      const out = await handleAuthWithPassword(await readBody(req))
+      rateGate(`a:${ip}`, 60, 600_000, '尝试次数过多，请稍后再试')
+      const out = await handleAuthWithPassword(await readBody(req), ip)
       return send(res, 200, out)
     }
     m = path.match(/^\/api\/collections\/users\/auth-refresh\/?$/)
@@ -746,9 +761,7 @@ const server = http.createServer(async (req, res) => {
       if (id && req.method === 'GET') return send(res, 200, await handleViewOne(table, id, auth))
       if (!id && req.method === 'POST') {
         // 注册限流：单 IP 每小时上限，防批量灌号
-        if (table === 'users' && !rateHit(`r:${ip}`, 20, 3_600_000)) {
-          throw new HttpErr(429, '注册尝试过多，请稍后再试')
-        }
+        if (table === 'users') rateGate(`r:${ip}`, 20, 3_600_000, '注册尝试过多，请稍后再试')
         return send(res, 200, await handleCreate(table, await readBody(req), auth))
       }
       if (id && (req.method === 'PATCH' || req.method === 'PUT')) {
