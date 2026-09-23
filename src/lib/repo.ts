@@ -57,13 +57,14 @@ async function syncCollection(
     }
   }
   // 删除护栏: 私有表只删自己的行; 公开表单轮删除量过大(疑似残缺状态)时跳过删除, 防整表误删
+  // 比例按「实际会删的行」(guarded)计算: 公开缓存里别人的行不参与, 否则会误伤自己的取消操作
   const missing = [...map.keys()].filter(sid => !seen.has(sid))
   const guarded = missing.filter(sid => {
     const row = map.get(sid)
     if (opts?.owns && row && !opts.owns(row)) return false
     return true
   })
-  const ratioOk = map.size <= 4 || missing.length <= Math.max(2, Math.floor(map.size * 0.25))
+  const ratioOk = map.size <= 4 || guarded.length <= Math.max(2, Math.floor(map.size * 0.25))
   if (ratioOk) {
     for (const sid of guarded) {
       const old = map.get(sid)
@@ -115,7 +116,7 @@ interface ChatRow {
 const j = (v: unknown, fb: unknown) => (v == null ? fb : v)
 
 export async function loadWorld(meId: string | null): Promise<World> {
-  const [profiles, postsR, pcR, eventsR, ecR, cmR, ulR, upR, urR, favR, fgR, visR, blR, reR, ciR, coR, rpR, dgR, alR, ssR, tourR] =
+  const [profiles, postsR, pcR, eventsR, ecR, cmR, ulR, upR, urR, favR, fgR, visR, blR, reR, ciR, coR, rpR, dgR, alR, ssR, tourR, clR, eaR] =
     await Promise.all([
       loadCol('profiles'),
       loadCol('posts'),
@@ -138,7 +139,26 @@ export async function loadWorld(meId: string | null): Promise<World> {
       loadCol('admin_logs'),
       loadCol('site_settings'),
       loadCol('user_tour'),
+      loadCol('content_likes'),
+      loadCol('event_attendees'),
     ])
+
+  // 计数拆分表装配: kind:target -> 点赞人名单; event -> 报名名单(按创建序)
+  const likesBy = new Map<string, string[]>()
+  for (const r of clR) {
+    const k = `${String(r.kind)}:${String(r.target_sid)}`
+    const list = likesBy.get(k)
+    if (list) list.push(String(r.owner_sid))
+    else likesBy.set(k, [String(r.owner_sid)])
+  }
+  const roster = (k: string) => likesBy.get(k) ?? []
+  const attendeesBy = new Map<string, string[]>()
+  for (const r of eaR) {
+    const k = String(r.event_sid)
+    const list = attendeesBy.get(k)
+    if (list) list.push(String(r.owner_sid))
+    else attendeesBy.set(k, [String(r.owner_sid)])
+  }
 
   const users: User[] = profiles.map(r => ({
     id: r.sid,
@@ -170,13 +190,13 @@ export async function loadWorld(meId: string | null): Promise<World> {
     images: (j(r.images, []) as string[]) ?? [],
     topic: String(r.topic ?? ''),
     featured: !!r.featured,
-    likes: (j(r.likes, []) as string[]) ?? [],
+    likes: roster(`post:${r.sid}`),
     comments: [],
     at: Number(r.at ?? 0),
   }))
   for (const c of pcR) {
     const p = posts.find(x => x.id === c.post_sid)
-    if (p) p.comments.push({ id: c.sid, authorId: String(c.author_sid ?? ''), text: String(c.text ?? ''), at: Number(c.at ?? 0), likes: (j(c.likes, []) as string[]) ?? [] })
+    if (p) p.comments.push({ id: c.sid, authorId: String(c.author_sid ?? ''), text: String(c.text ?? ''), at: Number(c.at ?? 0), likes: roster(`post_comment:${c.sid}`) })
   }
   for (const p of posts) p.comments.sort((a, b) => a.at - b.at)
 
@@ -191,7 +211,7 @@ export async function loadWorld(meId: string | null): Promise<World> {
     capacity: Number(r.capacity ?? 0),
     desc: String(r.desc ?? ''),
     tags: (j(r.tags, []) as string[]) ?? [],
-    attendees: (j(r.attendees, []) as string[]) ?? [],
+    attendees: attendeesBy.get(r.sid) ?? [],
     host: String(r.host ?? ''),
     creatorId: r.creator_sid ? String(r.creator_sid) : undefined,
     requirements: r.requirements ? String(r.requirements) : undefined,
@@ -201,7 +221,7 @@ export async function loadWorld(meId: string | null): Promise<World> {
   }))
   for (const c of ecR) {
     const ev = events.find(x => x.id === c.event_sid)
-    if (ev) (ev.comments ??= []).push({ id: c.sid, authorId: String(c.author_sid ?? ''), text: String(c.text ?? ''), at: Number(c.at ?? 0), likes: (j(c.likes, []) as string[]) ?? [], pinned: !!c.pinned })
+    if (ev) (ev.comments ??= []).push({ id: c.sid, authorId: String(c.author_sid ?? ''), text: String(c.text ?? ''), at: Number(c.at ?? 0), likes: roster(`event_comment:${c.sid}`), pinned: !!c.pinned })
   }
   for (const ev of events) (ev.comments ?? []).sort((a, b) => a.at - b.at)
 
@@ -362,12 +382,12 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
       'posts',
       s.posts.map(p => ({
         sid: p.id,
-        fields: { author_sid: p.authorId, text: p.text, images: p.images, topic: p.topic, featured: !!p.featured, likes: p.likes, at: p.at },
+        fields: { author_sid: p.authorId, text: p.text, images: p.images, topic: p.topic, featured: !!p.featured, at: p.at },
       })),
     ),
     syncCollection(
       'post_comments',
-      s.posts.flatMap(p => p.comments.map(c => ({ sid: c.id, fields: { post_sid: p.id, author_sid: c.authorId, text: c.text, likes: c.likes ?? [], at: c.at } }))),
+      s.posts.flatMap(p => p.comments.map(c => ({ sid: c.id, fields: { post_sid: p.id, author_sid: c.authorId, text: c.text, at: c.at } }))),
     ),
     syncCollection(
       'events',
@@ -383,7 +403,6 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
           capacity: ev.capacity,
           desc: ev.desc,
           tags: ev.tags,
-          attendees: ev.attendees,
           host: ev.host,
           creator_sid: ev.creatorId ?? '',
           requirements: ev.requirements ?? '',
@@ -394,7 +413,30 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
     ),
     syncCollection(
       'event_comments',
-      s.events.flatMap(ev => (ev.comments ?? []).map(c => ({ sid: c.id, fields: { event_sid: ev.id, author_sid: c.authorId, text: c.text, likes: c.likes ?? [], pinned: !!c.pinned, at: c.at } }))),
+      s.events.flatMap(ev => (ev.comments ?? []).map(c => ({ sid: c.id, fields: { event_sid: ev.id, author_sid: c.authorId, text: c.text, pinned: !!c.pinned, at: c.at } }))),
+    ),
+    // 计数拆分表: 只写「我」的点赞/报名行, 名单由服务端按行聚合
+    syncCollection(
+      'content_likes',
+      [
+        ...s.posts.flatMap(p => [
+          ...(p.likes.includes(meId) ? [{ sid: `post:${p.id}:${meId}`, fields: { kind: 'post', target_sid: p.id, owner_sid: meId } }] : []),
+          ...p.comments.flatMap(c =>
+            (c.likes ?? []).includes(meId) ? [{ sid: `post_comment:${c.id}:${meId}`, fields: { kind: 'post_comment', target_sid: c.id, owner_sid: meId } }] : [],
+          ),
+        ]),
+        ...s.events.flatMap(ev =>
+          (ev.comments ?? []).flatMap(c =>
+            (c.likes ?? []).includes(meId) ? [{ sid: `event_comment:${c.id}:${meId}`, fields: { kind: 'event_comment', target_sid: c.id, owner_sid: meId } }] : [],
+          ),
+        ),
+      ],
+      { owns: r => String(r.owner_sid) === meId },
+    ),
+    syncCollection(
+      'event_attendees',
+      s.events.filter(ev => ev.attendees.includes(meId)).map(ev => ({ sid: `${ev.id}:${meId}`, fields: { event_sid: ev.id, owner_sid: meId } })),
+      { owns: r => String(r.owner_sid) === meId },
     ),
     syncCollection(
       'chat_messages',
@@ -451,7 +493,7 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
     ),
     syncCollection(
       'digests',
-      s.digests.map(d => ({ sid: d.id, fields: { title: d.title, intro: d.intro, post_sids: d.postIds, cover: d.cover ?? '', covers: d.covers ?? [], issue: d.issue, views: d.views, at: d.at } })),
+      s.digests.map(d => ({ sid: d.id, fields: { title: d.title, intro: d.intro, post_sids: d.postIds, cover: d.cover ?? '', covers: d.covers ?? [], issue: d.issue, at: d.at } })),
     ),
     syncCollection('admin_logs', s.adminLogs.map(l => ({ sid: l.id, fields: { text: l.text, at: l.at } }))),
     syncCollection('site_settings', [
@@ -468,6 +510,15 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
     ]),
     syncCollection('user_tour', [{ sid: meId, fields: { owner_sid: meId, data: s.tour } }], { owns: r => String(r.owner_sid) === meId }),
   ])
+}
+
+/** 精选浏览计数：走网关原子自增端点（未登录/离线时静默跳过，不影响阅读） */
+export async function bumpDigestView(sid: string): Promise<void> {
+  try {
+    await pb.send(`/api/collections/digests/records/${encodeURIComponent(sid)}/view`, { method: 'POST' })
+  } catch {
+    // 忽略：下次打开会重试
+  }
 }
 
 /** 修改当前登录账号密码(需校验旧密码) */

@@ -19,6 +19,8 @@ export const DATA_TABLES: Array<{ name: string; label: string }> = [
   { name: 'digests', label: '每周精选' },
   { name: 'chat_messages', label: '私聊消息' },
   { name: 'user_likes', label: '心动记录' },
+  { name: 'content_likes', label: '内容点赞' },
+  { name: 'event_attendees', label: '活动报名' },
   { name: 'user_passes', label: '跳过记录' },
   { name: 'user_reads', label: '走访足迹' },
   { name: 'visits', label: '主页走访' },

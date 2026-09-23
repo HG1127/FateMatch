@@ -6,12 +6,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import pg from 'pg'
+import bcrypt from 'bcryptjs'
 
 export const SCHEMA = 'e2e_smoke'
 export const GW_PORT = 7200
 export const PID_FILE = path.join(os.tmpdir(), 'neon-e2e-gw.pid')
+export const ADMIN_EMAIL = 'admin@smoke.test'
+export const ADMIN_PASS = 'Admin#2026x'
+const ADMIN_ID = 'e2eadmin0000001'
 
-async function waitHealth(url, tries = 30) {
+async function waitHealth(url, tries = 90) {
   for (let i = 0; i < tries; i++) {
     try {
       const r = await fetch(url + '/api/health')
@@ -36,6 +40,17 @@ export default async function globalSetup() {
   await client.query(`select set_config('search_path', '${SCHEMA}', true)`)
   await client.query(ddl)
   await client.query('commit')
+  // 种一个测试掌柜：管理员身份只能由数据侧预置，接口不开放自我提权
+  await client.query(
+    `insert into ${SCHEMA}.users (id, email, password_hash, name, avatar, email_visibility, verified, created, updated)
+     values ($1, $2, $3, '冒烟掌柜', '', false, true, now(), now())`,
+    [ADMIN_ID, ADMIN_EMAIL, bcrypt.hashSync(ADMIN_PASS, 10)],
+  )
+  await client.query(
+    `insert into ${SCHEMA}.profiles (id, sid, nickname, role, created, updated)
+     values ($1, $1, '冒烟掌柜', 'admin', now(), now())`,
+    [ADMIN_ID],
+  )
   await client.end()
 
   const gw = spawn('node', ['server/neon-gateway.mjs'], {

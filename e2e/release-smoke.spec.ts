@@ -125,6 +125,133 @@ test.describe('数据网关主链路', () => {
   })
 })
 
+test.describe('计数拆分与权限收紧', () => {
+  const ADMIN_EMAIL = 'admin@smoke.test'
+  const ADMIN_PASS = 'Admin#2026x'
+
+  test('主表仅作者/发起人可改，计数走独立表，不可自我提权', async ({ request }) => {
+    const stamp = Date.now()
+    const mailA = `cnt-a-${stamp}@smoke.test`
+    const mailB = `cnt-b-${stamp}@smoke.test`
+    const regA = await request.post('/api/collections/users/records', {
+      data: { email: mailA, password: PASS, passwordConfirm: PASS, name: '计数甲' },
+    })
+    const regB = await request.post('/api/collections/users/records', {
+      data: { email: mailB, password: PASS, passwordConfirm: PASS, name: '计数乙' },
+    })
+    expect(regA.status()).toBe(200)
+    expect(regB.status()).toBe(200)
+    const loginA = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mailA, password: PASS } })).json()
+    const loginB = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mailB, password: PASS } })).json()
+    const HA = { Authorization: loginA.token }
+    const HB = { Authorization: loginB.token }
+    const aId = loginA.record.id
+    const bId = loginB.record.id
+
+    // 甲发帖；乙改甲的帖子被拒（收紧前这里曾是 200）
+    const postSid = `e2e-c-post-${stamp}`
+    const post = await request.post('/api/collections/posts/records', {
+      headers: HA,
+      data: { sid: postSid, author_sid: aId, text: '甲的动态', images: [], topic: '', featured: false, at: stamp },
+    })
+    expect(post.status()).toBe(200)
+    const postId = (await post.json()).id
+    const hijack = await request.patch(`/api/collections/posts/records/${postId}`, {
+      headers: HB,
+      data: { text: '被乙篡改', featured: true },
+    })
+    expect(hijack.status()).toBe(403)
+
+    // 自我提权被字段级拦截：乙给自己建资料行塞 role=admin，落库后仍是普通成员
+    const prof = await request.post('/api/collections/profiles/records', {
+      headers: HB,
+      data: { sid: bId, nickname: '乙', role: 'admin', banned: false },
+    })
+    expect(prof.status()).toBe(200)
+    expect((await prof.json()).role).not.toBe('admin')
+    const adminLogs = await request.get('/api/collections/admin_logs/records', { headers: HB })
+    expect(adminLogs.status()).toBe(403)
+
+    // 点赞走独立表：乙给自己的点赞行建档 OK，冒充甲被拒，匿名可读，甲不能删乙的行
+    const likeSid = `post:${postSid}:${bId}`
+    const like = await request.post('/api/collections/content_likes/records', {
+      headers: HB,
+      data: { sid: likeSid, kind: 'post', target_sid: postSid, owner_sid: bId },
+    })
+    expect(like.status()).toBe(200)
+    const likeId = (await like.json()).id
+    const forge = await request.post('/api/collections/content_likes/records', {
+      headers: HB,
+      data: { sid: `post:${postSid}:${aId}`, kind: 'post', target_sid: postSid, owner_sid: aId },
+    })
+    expect(forge.status()).toBe(403)
+    const anonLikes = await request.get('/api/collections/content_likes/records')
+    expect(anonLikes.status()).toBe(200)
+    const delByOther = await request.delete(`/api/collections/content_likes/records/${likeId}`, { headers: HA })
+    expect(delByOther.status()).toBe(403)
+    const delOwn = await request.delete(`/api/collections/content_likes/records/${likeId}`, { headers: HB })
+    expect(delOwn.status()).toBe(204)
+
+    // 活动：乙建活动并报名；留言作者可删自己的留言，活动发起人可置顶他人留言
+    const evSid = `e2e-c-ev-${stamp}`
+    const ev = await request.post('/api/collections/events/records', {
+      headers: HB,
+      data: { sid: evSid, title: '乙的活动', city: '杭州', region: '', cover: '', date: '2026-10-01', time: '19:00', capacity: 2, desc: '', tags: [], host: '乙', creator_sid: bId, requirements: '', pinned: false, images: [] },
+    })
+    expect(ev.status()).toBe(200)
+    const evId = (await ev.json()).id
+    const join = await request.post('/api/collections/event_attendees/records', {
+      headers: HB,
+      data: { sid: `${evSid}:${bId}`, event_sid: evSid, owner_sid: bId },
+    })
+    expect(join.status()).toBe(200)
+    const ecSid = `e2e-c-ec-${stamp}`
+    const ec = await request.post('/api/collections/event_comments/records', {
+      headers: HA,
+      data: { sid: ecSid, event_sid: evSid, author_sid: aId, text: '甲的留言', pinned: false, at: stamp },
+    })
+    expect(ec.status()).toBe(200)
+    const ecId = (await ec.json()).id
+    const pinByCreator = await request.patch(`/api/collections/event_comments/records/${ecId}`, {
+      headers: HB,
+      data: { pinned: true },
+    })
+    expect(pinByCreator.status()).toBe(200)
+    const delOwnComment = await request.delete(`/api/collections/event_comments/records/${ecId}`, { headers: HA })
+    expect(delOwnComment.status()).toBe(204)
+    const delEvByOther = await request.delete(`/api/collections/events/records/${evId}`, { headers: HA })
+    expect(delEvByOther.status()).toBe(403)
+    const delOwnEvent = await request.delete(`/api/collections/events/records/${evId}`, { headers: HB })
+    expect(delOwnEvent.status()).toBe(204)
+
+    // 精选：成员建/改被拒；浏览计数走原子端点（匿名 403，登录 +1）
+    const dgSid = `e2e-c-dg-${stamp}`
+    const memberDigest = await request.post('/api/collections/digests/records', {
+      headers: HB,
+      data: { sid: dgSid, title: '乙的精选', intro: '', post_sids: [], issue: 1, at: stamp },
+    })
+    expect(memberDigest.status()).toBe(403)
+    const adminLogin = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: ADMIN_EMAIL, password: ADMIN_PASS } })).json()
+    const HAdmin = { Authorization: adminLogin.token }
+    const dg = await request.post('/api/collections/digests/records', {
+      headers: HAdmin,
+      data: { sid: dgSid, title: '掌柜精选', intro: '', post_sids: [postSid], issue: 1, at: stamp },
+    })
+    expect(dg.status()).toBe(200)
+    const anonView = await request.post(`/api/collections/digests/records/${dgSid}/view`)
+    expect(anonView.status()).toBe(403)
+    const view1 = await request.post(`/api/collections/digests/records/${dgSid}/view`, { headers: HB })
+    expect(view1.status()).toBe(200)
+    expect((await view1.json()).views).toBe(1)
+    const view2 = await request.post(`/api/collections/digests/records/${dgSid}/view`, { headers: HB })
+    expect((await view2.json()).views).toBe(2)
+
+    // 清理
+    expect((await request.delete(`/api/collections/users/records/${aId}`, { headers: HA })).status()).toBe(204)
+    expect((await request.delete(`/api/collections/users/records/${bId}`, { headers: HB })).status()).toBe(204)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })

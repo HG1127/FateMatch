@@ -5,7 +5,7 @@ import { portrait, scene } from './art'
 import { ALL_CITIES, districtOf } from './region'
 import { getLocalAccount, onLocalAccountChange, logoutLocalAccount } from './localAuth'
 import type { LocalAccount } from './localAuth'
-import { loadWorld, syncWorld } from './repo'
+import { loadWorld, syncWorld, bumpDigestView } from './repo'
 import type { FestTemplate } from './festivals'
 
 export type Gender = 'male' | 'female'
@@ -870,6 +870,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     viewDigest(id) {
       setDigests(prev => prev.map(d => (d.id === id ? { ...d, views: (d.views ?? 0) + 1 } : d)))
+      // 计数走服务端原子自增端点持久化（本地状态先加一保证界面即时）
+      void bumpDigestView(id)
     },
     joinEvent(eventId, contact) {
       if (!me) return

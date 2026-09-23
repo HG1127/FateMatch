@@ -339,3 +339,33 @@ CREATE TABLE IF NOT EXISTS user_tour (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_tour_sid ON user_tour ("sid");
 CREATE INDEX IF NOT EXISTS idx_user_tour_owner_sid ON user_tour ("owner_sid");
+
+-- v1.1 计数拆分：内嵌名单列（posts.likes / post_comments.likes / event_comments.likes /
+-- events.attendees）拆出为独立关系表，主表 update 权限随之收紧到「作者/发起人 + 掌柜」。
+-- 旧列保留但网关已屏蔽读写（单一数据源为新表）。
+CREATE TABLE IF NOT EXISTS content_likes (
+  id text PRIMARY KEY,
+  "sid" text,
+  "kind" text,
+  "target_sid" text,
+  "owner_sid" text,
+  created timestamptz NOT NULL DEFAULT now(),
+  updated timestamptz NOT NULL DEFAULT now(),
+  synced_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_content_likes_sid ON content_likes ("sid");
+CREATE INDEX IF NOT EXISTS idx_content_likes_target ON content_likes ("kind", "target_sid");
+CREATE INDEX IF NOT EXISTS idx_content_likes_owner ON content_likes ("owner_sid");
+
+CREATE TABLE IF NOT EXISTS event_attendees (
+  id text PRIMARY KEY,
+  "sid" text,
+  "event_sid" text,
+  "owner_sid" text,
+  created timestamptz NOT NULL DEFAULT now(),
+  updated timestamptz NOT NULL DEFAULT now(),
+  synced_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_attendees_sid ON event_attendees ("sid");
+CREATE INDEX IF NOT EXISTS idx_event_attendees_event ON event_attendees ("event_sid");
+CREATE INDEX IF NOT EXISTS idx_event_attendees_owner ON event_attendees ("owner_sid");

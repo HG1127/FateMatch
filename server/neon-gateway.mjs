@@ -104,6 +104,14 @@ const OUT_ALIAS = { users: { email_visibility: 'emailVisibility' } }
 const IN_ALIAS = { users: { emailVisibility: 'email_visibility', password: 'password_hash' } }
 const HIDDEN = new Set(['password_hash', 'synced_at'])
 
+// v1.1 计数拆分：内嵌名单列已迁移到 content_likes / event_attendees，
+// 旧列读侧屏蔽（防陈旧数据误导），写侧屏蔽（新表是唯一数据源）。
+// digests.views 只允许经浏览计数端点原子自增，不接受整行覆写。
+const READ_BLOCKED = { posts: ['likes'], post_comments: ['likes'], event_comments: ['likes'], events: ['attendees'] }
+const WRITE_BLOCKED = { posts: ['likes'], post_comments: ['likes'], event_comments: ['likes'], events: ['attendees'], digests: ['views'] }
+// 仅掌柜可写的敏感字段：防止成员改自己的资料行自我提权 / 自我解封
+const ADMIN_ONLY_FIELDS = { profiles: ['role', 'banned'] }
+
 // ---------- 权限规则（与原数据服务逐条一致） ----------
 
 const A = 'auth' // 任意登录用户
@@ -113,13 +121,25 @@ const OPEN = 'open' // 公开
 const DENY = 'deny'
 const me = (f) => ({ f }) // 字段 = 当前用户 id
 
+/**
+ * 活动留言的写规则（函数规则，支持跨表判定）：
+ * 作者本人 / 掌柜 / 所属活动的发起人（发起人在界面上可置顶、删除自己活动下的留言）。
+ */
+async function eventCommentWrite(row, auth) {
+  if (!auth) return false
+  if (auth.role === 'admin') return true
+  if (String(row.author_sid ?? '') === auth.id) return true
+  const ev = await q(`select creator_sid from ${tq('events')} where sid = $1 limit 1`, [row.event_sid])
+  return !!ev.rows[0] && String(ev.rows[0].creator_sid ?? '') === auth.id
+}
+
 const RULES = {
   users: { list: SELF, view: SELF, create: OPEN, update: SELF, delete: SELF },
   profiles: { list: OPEN, view: OPEN, create: A, update: [me('sid'), ADMIN], delete: ADMIN },
-  posts: { list: OPEN, view: OPEN, create: A, update: A, delete: ADMIN },
-  post_comments: { list: OPEN, view: OPEN, create: A, update: A, delete: ADMIN },
-  events: { list: OPEN, view: OPEN, create: A, update: A, delete: ADMIN },
-  event_comments: { list: OPEN, view: OPEN, create: A, update: A, delete: ADMIN },
+  posts: { list: OPEN, view: OPEN, create: A, update: [me('author_sid'), ADMIN], delete: ADMIN },
+  post_comments: { list: OPEN, view: OPEN, create: A, update: [me('author_sid'), ADMIN], delete: [me('author_sid'), ADMIN] },
+  events: { list: OPEN, view: OPEN, create: A, update: [me('creator_sid'), ADMIN], delete: [me('creator_sid'), ADMIN] },
+  event_comments: { list: OPEN, view: OPEN, create: A, update: eventCommentWrite, delete: eventCommentWrite },
   chat_messages: { list: A, view: A, create: [me('sid_a'), me('sid_b'), ADMIN], update: [me('sid_a'), me('sid_b'), ADMIN], delete: [me('from_sid'), ADMIN] },
   user_likes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   user_passes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
@@ -132,7 +152,9 @@ const RULES = {
   checkins: { list: A, view: A, create: A, update: A, delete: A },
   contacts: { list: A, view: A, create: [me('user_sid')], update: [me('user_sid')], delete: [me('user_sid'), ADMIN] },
   reports: { list: [me('by_sid'), ADMIN], view: [me('by_sid'), ADMIN], create: [me('by_sid')], update: A, delete: ADMIN },
-  digests: { list: OPEN, view: OPEN, create: A, update: A, delete: ADMIN },
+  digests: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: ADMIN },
+  content_likes: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
+  event_attendees: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
   admin_logs: { list: ADMIN, view: ADMIN, create: ADMIN, update: ADMIN, delete: ADMIN },
   site_settings: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: DENY },
   user_tour: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
@@ -208,6 +230,7 @@ function toRecord(table, row) {
   const rec = { id: row.id, collectionId: colIdOf(table), collectionName: table }
   for (const [col] of cols) {
     if (col === 'id' || col === 'created' || col === 'updated' || HIDDEN.has(col)) continue
+    if (READ_BLOCKED[table]?.includes(col)) continue
     const out = OUT_ALIAS[table]?.[col] ?? col
     rec[out] = row[col] ?? null
   }
@@ -216,8 +239,8 @@ function toRecord(table, row) {
   return rec
 }
 
-/** 请求体字段 -> DB 列（未知字段忽略） */
-function bodyToCols(table, body) {
+/** 请求体字段 -> DB 列（未知字段、已拆分旧列、非掌柜写敏感字段一律忽略） */
+function bodyToCols(table, body, auth) {
   const cols = COLUMNS.get(table)
   if (!cols) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   const out = new Map()
@@ -225,6 +248,8 @@ function bodyToCols(table, body) {
     if (['id', 'created', 'updated', 'passwordConfirm', 'oldPassword'].includes(k)) continue
     const col = IN_ALIAS[table]?.[k] ?? k.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase())
     if (!cols.has(col) || HIDDEN.has(col)) continue
+    if (WRITE_BLOCKED[table]?.includes(col)) continue
+    if (auth?.role !== 'admin' && ADMIN_ONLY_FIELDS[table]?.includes(col)) continue
     out.set(col, v)
   }
   return out
@@ -253,8 +278,9 @@ function needAuth(auth) {
   return auth
 }
 
-/** 行级规则判定 */
-function allowRow(rule, row, auth) {
+/** 行级规则判定（支持声明式规则与异步函数规则） */
+async function allowRow(rule, row, auth) {
+  if (typeof rule === 'function') return !!auth && !!(await rule(row, auth))
   if (rule === OPEN || rule === 'public') return true
   if (rule === DENY) return false
   if (rule === A) return !!auth
@@ -328,7 +354,7 @@ async function handleList(table, url, req, auth) {
 async function handleViewOne(table, id, auth) {
   const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
-  if (!allowRow(RULES[table].view, r.rows[0], auth)) {
+  if (!(await allowRow(RULES[table].view, r.rows[0], auth))) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
   }
   return toRecord(table, r.rows[0])
@@ -339,7 +365,7 @@ async function handleCreate(table, body, auth) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
   }
   const cols = COLUMNS.get(table)
-  const data = bodyToCols(table, body)
+  const data = bodyToCols(table, body, auth)
   const id = typeof body?.id === 'string' && body.id ? body.id : genId()
 
   if (table === 'users') {
@@ -367,10 +393,19 @@ async function handleCreate(table, body, auth) {
     const values = [id, ...[...data.entries()].map(([c, v]) => castParam(cols.get(c), v))]
     const ph = names.map((_, i) => `$${i + 1}`)
     const quoted = names.map((n) => `"${n}"`)
-    await q(
-      `insert into ${tq(table)} (${quoted.join(',')}, created, updated) values (${ph.join(',')}, now(), now())`,
-      values,
-    )
+    try {
+      await q(
+        `insert into ${tq(table)} (${quoted.join(',')}, created, updated) values (${ph.join(',')}, now(), now())`,
+        values,
+      )
+    } catch (e) {
+      // sid 撞唯一索引：全量同步架构下多端并发重复建同一行，幂等返回已存在的记录
+      if (e?.code === '23505' && data.has('sid')) {
+        const ex = await q(`select * from ${tq(table)} where sid = $1`, [data.get('sid')])
+        if (ex.rows[0]) return toRecord(table, ex.rows[0])
+      }
+      throw e
+    }
   }
   const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   return toRecord(table, r.rows[0])
@@ -380,7 +415,7 @@ async function handleUpdate(table, id, body, auth) {
   const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   const existing = r.rows[0]
-  if (!allowRow(RULES[table].update, existing, auth)) {
+  if (!(await allowRow(RULES[table].update, existing, auth))) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
   }
   const cols = COLUMNS.get(table)
@@ -399,7 +434,7 @@ async function handleUpdate(table, id, body, auth) {
     ])
   }
 
-  const data = bodyToCols(table, body)
+  const data = bodyToCols(table, body, auth)
   if (data.size) {
     const sets = []
     const values = []
@@ -417,7 +452,7 @@ async function handleUpdate(table, id, body, auth) {
 async function handleDelete(table, id, auth) {
   const r = await q(`select * from ${tq(table)} where id = $1`, [id])
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
-  if (!allowRow(RULES[table].delete, r.rows[0], auth)) {
+  if (!(await allowRow(RULES[table].delete, r.rows[0], auth))) {
     throw new HttpErr(403, 'You are not allowed to perform this operation.')
   }
   await q(`delete from ${tq(table)} where id = $1`, [id])
@@ -456,6 +491,18 @@ async function handleAuthRefresh(auth) {
     exp: Math.floor(Date.now() / 1000) + 14 * 86400,
   })
   return { token, record: toRecord('users', r.rows[0]) }
+}
+
+/** 精选浏览计数：登录成员触发，服务端原子自增（客户端不再整行覆写 views） */
+async function handleDigestView(sidOrId, auth) {
+  needAuth(auth)
+  const r = await q(
+    `update ${tq('digests')} set views = coalesce(views, 0) + 1, updated = now()
+     where sid = $1 or id = $1 returning *`,
+    [sidOrId],
+  )
+  if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
+  return toRecord('digests', r.rows[0])
 }
 
 // ---------- HTTP 层 ----------
@@ -514,6 +561,13 @@ const server = http.createServer(async (req, res) => {
     m = path.match(/^\/api\/collections\/users\/auth-refresh\/?$/)
     if (m && req.method === 'POST') {
       const out = await handleAuthRefresh(auth)
+      return send(res, 200, out)
+    }
+
+    // 精选浏览计数（原子自增端点）
+    m = path.match(/^\/api\/collections\/digests\/records\/([^/]+)\/view\/?$/)
+    if (m && req.method === 'POST') {
+      const out = await handleDigestView(decodeURIComponent(m[1]), auth)
       return send(res, 200, out)
     }
 

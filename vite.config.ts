@@ -7,7 +7,7 @@
 //   - 不要删 rhSourcePlugin 那段函数定义, 也不要删 @babel/parser / @babel/traverse / magic-string 这三个 import
 import path from 'node:path'
 import fs from 'node:fs'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { parse as babelParse } from '@babel/parser'
 import _traverse from '@babel/traverse'
@@ -110,5 +110,9 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     port: 8000,
+  },
+  // vitest: e2e/ 是 Playwright 发布冒烟的地盘(由 pnpm e2e 单独跑), 单测只扫 src
+  test: {
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 })
