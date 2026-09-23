@@ -460,6 +460,28 @@ test.describe('后端能力补齐', () => {
     })
     expect(forgeFav.status()).toBe(403)
 
+    // 公开表署名冒充（v1.7 收紧）：乙冒甲发动态 / 建活动 / 写评论 / 建资料行，全被拒
+    const forgePost = await request.post('/api/collections/posts/records', {
+      headers: HB,
+      data: { sid: `forge-p-${stamp}`, author_sid: aId, text: '冒充甲的动态', images: [], topic: '', featured: false, at: stamp },
+    })
+    expect(forgePost.status()).toBe(403)
+    const forgeEvent = await request.post('/api/collections/events/records', {
+      headers: HB,
+      data: { sid: `forge-e-${stamp}`, title: '冒充活动', city: '杭州', region: '', cover: '', date: '2026-10-01', time: '19:00', capacity: 10, desc: '', tags: [], host: '乙', creator_sid: aId, requirements: '', pinned: false, images: [] },
+    })
+    expect(forgeEvent.status()).toBe(403)
+    const forgeComment = await request.post('/api/collections/post_comments/records', {
+      headers: HB,
+      data: { sid: `forge-c-${stamp}`, post_sid: 'whatever', author_sid: aId, text: '冒充评论', at: stamp },
+    })
+    expect(forgeComment.status()).toBe(403)
+    const forgeProfile = await request.post('/api/collections/profiles/records', {
+      headers: HB,
+      data: { sid: aId, nickname: '冒充甲' },
+    })
+    expect(forgeProfile.status()).toBe(403)
+
     // 甲拉黑乙：乙的私信与心动被服务端拒绝（此前只有客户端过滤）
     const blk = await request.post('/api/collections/blocks/records', {
       headers: HA,

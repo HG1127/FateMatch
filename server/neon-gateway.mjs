@@ -194,11 +194,11 @@ const CREATE_HOOKS = {
 
 const RULES = {
   users: { list: SELF, view: SELF, create: OPEN, update: SELF, delete: SELF },
-  profiles: { list: OPEN, view: OPEN, create: A, update: [me('sid'), ADMIN], delete: ADMIN },
-  posts: { list: OPEN, view: OPEN, create: A, update: [me('author_sid'), ADMIN], delete: ADMIN },
-  post_comments: { list: OPEN, view: OPEN, create: A, update: [me('author_sid'), ADMIN], delete: [me('author_sid'), ADMIN] },
-  events: { list: OPEN, view: OPEN, create: A, update: [me('creator_sid'), ADMIN], delete: [me('creator_sid'), ADMIN] },
-  event_comments: { list: OPEN, view: OPEN, create: A, update: eventCommentWrite, delete: eventCommentWrite },
+  profiles: { list: OPEN, view: OPEN, create: [me('sid'), ADMIN], update: [me('sid'), ADMIN], delete: ADMIN },
+  posts: { list: OPEN, view: OPEN, create: [me('author_sid'), ADMIN], update: [me('author_sid'), ADMIN], delete: ADMIN },
+  post_comments: { list: OPEN, view: OPEN, create: [me('author_sid'), ADMIN], update: [me('author_sid'), ADMIN], delete: [me('author_sid'), ADMIN] },
+  events: { list: OPEN, view: OPEN, create: [me('creator_sid'), ADMIN], update: [me('creator_sid'), ADMIN], delete: [me('creator_sid'), ADMIN] },
+  event_comments: { list: OPEN, view: OPEN, create: [me('author_sid'), ADMIN], update: eventCommentWrite, delete: eventCommentWrite },
   chat_messages: { list: [me('sid_a'), me('sid_b'), ADMIN], view: [me('sid_a'), me('sid_b'), ADMIN], create: [me('sid_a'), me('sid_b'), ADMIN], update: [me('sid_a'), me('sid_b'), ADMIN], delete: [me('from_sid'), ADMIN] },
   user_likes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   user_passes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },

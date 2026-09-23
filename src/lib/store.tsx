@@ -582,6 +582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               tour: {},
             },
             account.id,
+            SEED_IDS,
           )
           world = await loadWorld(account.id)
         }
@@ -632,6 +633,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       void syncWorld(
         { users, posts, events, settings, digests, reports, adminLogs, match, favs, favmeta, visits, blocks, reminders, checkins, contacts, tour },
         account.id,
+        SEED_IDS,
       ).catch(() => toast.error('保存未成功,数据库写入异常'))
     }, 800)
     return () => clearTimeout(t)

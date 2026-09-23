@@ -29,7 +29,7 @@ async function loadCol(col: string): Promise<Row[]> {
 async function syncCollection(
   col: string,
   rows: Array<{ sid: string; fields: Record<string, unknown> }>,
-  opts?: { owns?: (r: Row) => boolean },
+  opts?: { owns?: (r: Row) => boolean; skipCreate?: (r: { sid: string; fields: Record<string, unknown> }) => boolean },
 ) {
   const map = cache[col] ?? new Map<string, Row & { _key?: string }>()
   const seen = new Set<string>()
@@ -39,6 +39,9 @@ async function syncCollection(
     const key = JSON.stringify(r.fields)
     const old = map.get(r.sid)
     if (!old) {
+      // 种子归属行:服务端 create 已收紧到本人署名,客户端不再有权创建。
+      // 跳过以免每轮同步静默重试 403(全新环境由种子脚本灌入,见 docs/12)。
+      if (opts?.skipCreate?.(r)) continue
       ops.push(
         pb
           .collection(col)
@@ -351,7 +354,9 @@ export interface WorldState {
   tour: Record<string, boolean>
 }
 
-export async function syncWorld(s: WorldState, meId: string): Promise<void> {
+export async function syncWorld(s: WorldState, meId: string, seedIds?: ReadonlySet<string>): Promise<void> {
+  // 种子内容(演示数据)不再由客户端创建:归属种子用户、或官方活动(creator_sid 为空)即跳过建行
+  const seeded = (v: unknown) => (!v ? false : (seedIds?.has(String(v)) ?? false))
   await Promise.all([
     syncCollection(
       'profiles',
@@ -377,6 +382,7 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
           created_at: u.createdAt,
         },
       })),
+      { skipCreate: r => seeded(r.sid) },
     ),
     syncCollection(
       'posts',
@@ -384,10 +390,12 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
         sid: p.id,
         fields: { author_sid: p.authorId, text: p.text, images: p.images, topic: p.topic, featured: !!p.featured, at: p.at },
       })),
+      { skipCreate: r => seeded(r.fields.author_sid) },
     ),
     syncCollection(
       'post_comments',
       s.posts.flatMap(p => p.comments.map(c => ({ sid: c.id, fields: { post_sid: p.id, author_sid: c.authorId, text: c.text, at: c.at } }))),
+      { skipCreate: r => seeded(r.fields.author_sid) },
     ),
     syncCollection(
       'events',
@@ -410,10 +418,12 @@ export async function syncWorld(s: WorldState, meId: string): Promise<void> {
           images: ev.images ?? [],
         },
       })),
+      { skipCreate: r => seeded(r.fields.creator_sid) || !r.fields.creator_sid },
     ),
     syncCollection(
       'event_comments',
       s.events.flatMap(ev => (ev.comments ?? []).map(c => ({ sid: c.id, fields: { event_sid: ev.id, author_sid: c.authorId, text: c.text, pinned: !!c.pinned, at: c.at } }))),
+      { skipCreate: r => seeded(r.fields.author_sid) },
     ),
     // 计数拆分表: 只写「我」的点赞/报名行, 名单由服务端按行聚合
     syncCollection(
