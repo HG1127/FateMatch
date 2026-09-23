@@ -39,7 +39,7 @@ const dayLabel = (at: number) => {
 }
 
 export function ChatPanel({ user }: { user: User }) {
-  const { me, chatWith, sendChat, pushReply, icebreakerFor, markRead, recallMsg } = useStore()
+  const { me, chatWith, sendChat, pushReply, icebreakerFor, markRead, recallMsg, pollChats } = useStore()
   const [text, setText] = useState('')
   const [typing, setTyping] = useState(false)
   const [pendingImgs, setPendingImgs] = useState<string[]>([])
@@ -56,6 +56,14 @@ export function ChatPanel({ user }: { user: User }) {
   useEffect(() => {
     boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' })
   }, [msgs.length, typing])
+
+  // 准实时收信(v1.9): 会话打开期间每 12 秒拉取服务端会话, 合并对方新消息
+  useEffect(() => {
+    const t = setInterval(() => {
+      void pollChats()
+    }, 12_000)
+    return () => clearInterval(t)
+  }, [pollChats])
 
   if (!me) return null
 

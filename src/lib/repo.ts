@@ -531,6 +531,26 @@ export async function bumpDigestView(sid: string): Promise<void> {
   }
 }
 
+/** 私信准实时（v1.9）：只拉会话表并刷新缓存，供聊天面板打开期间轮询合并对方新消息 */
+export async function refreshChats(): Promise<Record<string, ChatRow[]>> {
+  const cmR = await loadCol('chat_messages')
+  const chats: Record<string, ChatRow[]> = {}
+  for (const r of cmR) {
+    const key = [String(r.sid_a), String(r.sid_b)].sort().join(':')
+    ;(chats[key] ??= []).push({
+      id: r.sid,
+      from: String(r.from_sid ?? ''),
+      text: String(r.text ?? ''),
+      at: Number(r.at ?? 0),
+      recalled: !!r.recalled,
+      read: Number(r.read_at ?? 0) === 1 ? true : undefined,
+      images: (j(r.images, []) as string[]) ?? [],
+    })
+  }
+  for (const k of Object.keys(chats)) chats[k].sort((a, b) => a.at - b.at)
+  return chats
+}
+
 /** 修改当前登录账号密码(需校验旧密码) */
 export async function changeAccountPassword(oldPassword: string, password: string): Promise<void> {
   const rec = pb.authStore.record

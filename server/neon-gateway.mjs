@@ -294,6 +294,7 @@ function rateHit(key, limit, windowMs) {
 /** 超限即记日志并抛 429（安全审计：限流命中留痕） */
 function rateGate(key, limit, windowMs, msg) {
   if (!rateHit(key, limit, windowMs)) {
+    METRICS.rateLimitHits += 1
     console.warn(`rate-limit: ${key}`)
     throw new HttpErr(429, msg)
   }
@@ -314,9 +315,27 @@ const AUTH_FAILS = new Map() // identity -> { n, lockUntil }
 const AUTH_FAIL_LIMIT = 8
 const AUTH_LOCK_MS = 15 * 60 * 1000
 
+// ---------- v1.9 运行指标（内存计数，重启清零；仅掌柜可读，不含任何业务数据） ----------
+const METRICS = {
+  startedAt: Date.now(),
+  requests: 0, // 不含健康检查
+  byStatus: { '2xx': 0, '4xx': 0, '5xx': 0 },
+  latencyTotalMs: 0,
+  slowRequests: 0,
+  rateLimitHits: 0,
+  authFails: 0,
+  authLocks: 0,
+  authLockedRejects: 0,
+  oversizeBodies: 0,
+  uploads: { count: 0, bytes: 0 },
+  accountCascades: 0,
+  passwordResets: 0,
+}
+
 function assertNotLocked(identity, ip) {
   const rec = AUTH_FAILS.get(identity)
   if (rec && rec.lockUntil > Date.now()) {
+    METRICS.authLockedRejects += 1
     const mins = Math.ceil((rec.lockUntil - Date.now()) / 60000)
     console.warn(`auth-locked-reject: ${identity} ip=${ip}`)
     throw new HttpErr(429, `密码错误次数过多，请 ${mins} 分钟后再试`)
@@ -326,9 +345,11 @@ function assertNotLocked(identity, ip) {
 function noteAuthFail(identity, ip) {
   const rec = AUTH_FAILS.get(identity) ?? { n: 0, lockUntil: 0 }
   rec.n += 1
+  METRICS.authFails += 1
   if (rec.n >= AUTH_FAIL_LIMIT) {
     rec.lockUntil = Date.now() + AUTH_LOCK_MS
     rec.n = 0
+    METRICS.authLocks += 1
     console.warn(`auth-lock: ${identity} ip=${ip} 锁定 ${AUTH_LOCK_MS / 60000} 分钟`)
   } else {
     console.warn(`auth-fail: ${identity} ip=${ip} n=${rec.n}`)
@@ -720,6 +741,7 @@ async function cascadeUserDelete(id) {
     // chat_messages 保留：会话是双方共有记录，对方侧仍需可读
     await client.query(`delete from ${tq('users')} where id = $1`, [id])
     await client.query('commit')
+    METRICS.accountCascades += 1
     console.log(`account-cascade-delete: ${id}`)
   } catch (e) {
     try { await client.query('rollback') } catch { /* 已断开 */ }
@@ -798,6 +820,7 @@ async function handleAdminResetPassword(idOrEmail, auth) {
   let temp = ''
   for (let i = 0; i < 12; i++) temp += alpha[crypto.randomInt(alpha.length)]
   await q(`update ${tq('users')} set password_hash = $1, updated = now() where id = $2`, [bcrypt.hashSync(temp, 10), user.id])
+  METRICS.passwordResets += 1
   console.log(`admin-reset-password: target=${user.id} by=${auth.id}`)
   return { tempPassword: temp }
 }
@@ -821,6 +844,8 @@ async function handleUpload(body, auth) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true })
   const name = `${Date.now().toString(36)}-${crypto.randomBytes(12).toString('hex')}${ext}`
   await fs.promises.writeFile(path.join(UPLOAD_DIR, name), buf)
+  METRICS.uploads.count += 1
+  METRICS.uploads.bytes += buf.length
   return { url: `/api/uploads/${name}`, bytes: buf.length }
 }
 
@@ -866,6 +891,7 @@ async function readBody(req) {
   for await (const c of req) {
     size += c.length
     if (size > 25e6) {
+      METRICS.oversizeBodies += 1
       console.warn(`oversize-body: ${req.url} >${size}B`)
       throw new HttpErr(413, 'Request entity too large.')
     }
@@ -938,6 +964,23 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    // 运行指标（仅掌柜；内存计数，重启清零，不含业务数据）
+    if ((path === '/api/metrics' || path === '/api/metrics/') && req.method === 'GET') {
+      needAuth(auth)
+      if (auth.role !== 'admin') throw new HttpErr(403, 'You are not allowed to perform this operation.')
+      return send(res, 200, {
+        code: 200,
+        message: 'ok',
+        data: {
+          ...METRICS,
+          uptimeSec: Math.round((Date.now() - METRICS.startedAt) / 1000),
+          avgLatencyMs: METRICS.requests ? Math.round(METRICS.latencyTotalMs / METRICS.requests) : 0,
+          tables: [...COLUMNS.keys()].filter((x) => RULES[x]).length,
+          heapUsedMB: Math.round(process.memoryUsage().heapUsed / 1048576),
+        },
+      })
+    }
+
     // 记录接口
     m = path.match(/^\/api\/collections\/([^/]+)\/records(?:\/([^/]+))?\/?$/)
     if (m) {
@@ -969,7 +1012,17 @@ const server = http.createServer(async (req, res) => {
     send(res, status, errBody(e instanceof HttpErr ? e : new HttpErr(500, 'Internal server error.')))
   } finally {
     const ms = Date.now() - t0
-    if (ms > 800) console.warn(`slow: ${req.method} ${path} ${ms}ms`)
+    if (ms > 800) {
+      METRICS.slowRequests += 1
+      console.warn(`slow: ${req.method} ${path} ${ms}ms`)
+    }
+    // 指标计数（健康检查除外，避免看护轮询淹没真实流量）
+    if (!path.startsWith('/api/health')) {
+      METRICS.requests += 1
+      METRICS.latencyTotalMs += ms
+      const cls = `${Math.floor(res.statusCode / 100)}xx`
+      if (METRICS.byStatus[cls] !== undefined) METRICS.byStatus[cls] += 1
+    }
   }
 })
 

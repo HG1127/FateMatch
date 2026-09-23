@@ -650,6 +650,15 @@ test.describe('账号生命周期与附件', () => {
     const chatSid = `life-m-${stamp}`
     expect((await request.post('/api/collections/chat_messages/records', { headers: H, data: { sid: chatSid, sid_a: eId, sid_b: ADMIN_ID, from_sid: eId, text: '掌柜你好', images: [], recalled: false, read_at: 0, at: stamp } })).status()).toBe(200)
 
+    // 运行指标：匿名与成员被拒，掌柜可读且计数有效
+    expect((await request.get('/api/metrics')).status()).toBe(403)
+    expect((await request.get('/api/metrics', { headers: H })).status()).toBe(403)
+    const met = await request.get('/api/metrics', { headers: HAdmin })
+    expect(met.status()).toBe(200)
+    const metBody = await met.json()
+    expect(metBody.data.requests).toBeGreaterThan(0)
+    expect(metBody.data.uptimeSec).toBeGreaterThanOrEqual(0)
+
     // 注销本人账号
     expect((await request.delete(`/api/collections/users/records/${eId}`, { headers: H })).status()).toBe(204)
 

@@ -123,6 +123,61 @@ async function pollHealth() {
   }
 }
 
+// ---------- 每日自动备份（v1.9）：04:30 定时 + 启动补跑当日，产出落 backups/（已 gitignore） ----------
+
+const BACKUP_HOUR = 4
+const BACKUP_MIN = 30
+
+function runBackup(why) {
+  log(`备份开始（${why}）`)
+  const out = fs.openSync(WD_LOG, 'a')
+  let closed = false
+  const closeOut = () => {
+    if (closed) return
+    closed = true
+    try { fs.closeSync(out) } catch { /* 已关闭 */ }
+  }
+  // 连接串只经环境变量传给子进程，不落盘
+  const b = spawn('node', ['scripts/neon-backup.mjs'], {
+    cwd: ROOT,
+    env: { ...process.env, NEON_DSN: dsn },
+    stdio: ['ignore', out, out],
+  })
+  b.on('exit', (code) => {
+    closeOut()
+    if (!stopping) log(code === 0 ? '备份完成' : `备份失败 code=${code}（下个调度点或重启补跑会重试）`)
+  })
+  b.on('error', (e) => {
+    closeOut()
+    log(`备份失败：${e.message}`)
+  })
+}
+
+function msUntilNextBackup() {
+  const now = new Date()
+  const next = new Date(now)
+  next.setHours(BACKUP_HOUR, BACKUP_MIN, 0, 0)
+  if (next <= now) next.setDate(next.getDate() + 1)
+  return next.getTime() - now.getTime()
+}
+
+function scheduleBackup() {
+  if (stopping) return
+  setTimeout(() => {
+    runBackup('每日定时')
+    scheduleBackup()
+  }, msUntilNextBackup())
+}
+
+function todayBackupDone() {
+  const today = new Date().toISOString().slice(0, 10)
+  try {
+    return fs.existsSync(path.join(ROOT, 'backups', `db-${today}.json`))
+  } catch {
+    return false
+  }
+}
+
 // ---------- 启动流程 ----------
 
 async function main() {
@@ -167,7 +222,14 @@ async function main() {
 
   spawnChild()
   setInterval(() => { void pollHealth() }, POLL_MS)
-  log(`看门狗就绪：健康检查 ${HEALTH_URL}，每 ${POLL_MS / 1000}s 轮询`)
+
+  // 每日自动备份 + 启动补跑（当日时点已过且无当日备份时，30 秒后补一次）
+  scheduleBackup()
+  const now = new Date()
+  const pastDue = now.getHours() > BACKUP_HOUR || (now.getHours() === BACKUP_HOUR && now.getMinutes() >= BACKUP_MIN)
+  if (pastDue && !todayBackupDone()) setTimeout(() => runBackup('启动补跑'), 30_000)
+
+  log(`看门狗就绪：健康检查 ${HEALTH_URL} 每 ${POLL_MS / 1000}s 轮询；每日 ${BACKUP_HOUR}:${String(BACKUP_MIN).padStart(2, '0')} 自动备份（保留 7 份，启动补跑当日）`)
 }
 
 main().catch((e) => {

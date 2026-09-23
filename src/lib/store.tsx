@@ -5,7 +5,7 @@ import { portrait, scene } from './art'
 import { ALL_CITIES, districtOf } from './region'
 import { getLocalAccount, onLocalAccountChange, logoutLocalAccount } from './localAuth'
 import type { LocalAccount } from './localAuth'
-import { loadWorld, syncWorld, bumpDigestView, adminResetPassword } from './repo'
+import { loadWorld, syncWorld, bumpDigestView, adminResetPassword, refreshChats } from './repo'
 import { uploadImage } from './upload'
 import type { FestTemplate } from './festivals'
 
@@ -396,6 +396,8 @@ interface Store {
   isMutual: (otherId: string) => boolean
   chatWith: (otherId: string) => ChatMsg[]
   sendChat: (otherId: string, text: string, images?: string[]) => void
+  /** 拉取服务端会话并合并（聊天面板打开期间轮询，v1.9 准实时私信） */
+  pollChats: () => Promise<void>
   pushReply: (otherId: string, text: string) => void
   posts: Post[]
   events: EventItem[]
@@ -1131,6 +1133,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch {
         toast.error('重置未成功,请稍后再试')
         return null
+      }
+    },
+    async pollChats() {
+      if (!account) return
+      try {
+        const fresh = await refreshChats()
+        setMatch(prev => {
+          const chats = { ...prev.chats }
+          let changed = Object.keys(fresh).length !== Object.keys(chats).length
+          for (const [k, rows] of Object.entries(fresh)) {
+            const byId = new Map(rows.map(r => [r.id, r]))
+            // 本地尚未同步出去的新消息保留,等服务端回显后自然去重
+            for (const r of chats[k] ?? []) if (!byId.has(r.id)) byId.set(r.id, r)
+            const merged = [...byId.values()].sort((a, b) => a.at - b.at)
+            const old = chats[k]
+            if (!changed) {
+              changed = !old || old.length !== merged.length || merged.some((r, i) => r.id !== old[i].id || r.read !== old[i].read || r.recalled !== old[i].recalled)
+            }
+            chats[k] = merged
+          }
+          // 无变化返回原引用,避免轮询造成无谓渲染
+          return changed ? { ...prev, chats } : prev
+        })
+      } catch {
+        // 离线/异常静默,下一轮再试
       }
     },
     adminSetUserPhoto(uid, dataUrl) {
