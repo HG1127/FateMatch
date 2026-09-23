@@ -45,7 +45,10 @@ export function AuthPage() {
         nav(params.get('from') || '/')
       }
     } catch (e) {
-      toast.error(mode === 'register' ? regMsg(e) : '邮箱或密码不正确')
+      // 限流/锁定(429)透出服务端的具体提示，其余保持产品语兜底
+      const err = e as { status?: number; message?: string }
+      if (err?.status === 429 && err.message) toast.error(err.message)
+      else toast.error(mode === 'register' ? regMsg(e) : '邮箱或密码不正确')
     } finally {
       setBusy(false)
     }

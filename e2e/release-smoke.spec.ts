@@ -390,6 +390,40 @@ test.describe('输入尺寸护栏', () => {
   })
 })
 
+test.describe('登录防爆破', () => {
+  test('同一邮箱连续错 8 次密码后临时锁定，锁定期正确密码也被拒', async ({ request }) => {
+    test.setTimeout(180_000)
+    const stamp = Date.now()
+    const mail = `brute-${stamp}@smoke.test`
+    const reg = await request.post('/api/collections/users/records', {
+      data: { email: mail, password: PASS, passwordConfirm: PASS, name: '防爆破员' },
+    })
+    expect(reg.status()).toBe(200)
+    // 先成功登录拿清理用 token（成功登录会清零失败计数）
+    const login0 = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })).json()
+    const H = { Authorization: login0.token }
+    // 连续 8 次错密码 → 每次 400
+    for (let i = 0; i < 8; i++) {
+      const bad = await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: 'wrong-pass-1' } })
+      expect(bad.status()).toBe(400)
+    }
+    // 第 9 次：锁定期内，正确密码也被 429 拒绝
+    const locked = await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })
+    expect(locked.status()).toBe(429)
+    expect((await locked.json()).message).toContain('分钟')
+    // 锁定按邮箱隔离：其他账号登录不受影响
+    const mail2 = `brute2-${stamp}@smoke.test`
+    const reg2 = await request.post('/api/collections/users/records', { data: { email: mail2, password: PASS, passwordConfirm: PASS, name: '防爆破乙' } })
+    expect(reg2.status()).toBe(200)
+    const login2 = await request.post('/api/collections/users/auth-with-password', { data: { identity: mail2, password: PASS } })
+    expect(login2.status()).toBe(200)
+    // 清理（锁定只影响登录接口，持 token 的删除不受影响）
+    const l2 = await login2.json()
+    expect((await request.delete(`/api/collections/users/records/${login0.record.id}`, { headers: H })).status()).toBe(204)
+    expect((await request.delete(`/api/collections/users/records/${l2.record.id}`, { headers: { Authorization: l2.token } })).status()).toBe(204)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })

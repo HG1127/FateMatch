@@ -245,6 +245,60 @@ class HttpErr extends Error {
   }
 }
 
+// ---------- v1.4 限流与防爆破（内存固定窗口；单进程语义，重启清零，接公网/多实例前需升级共享态） ----------
+
+const RATE_BUCKETS = new Map() // key -> { n, resetAt }
+
+/** 窗口内计数 +1；未超限返回 true，超限返回 false */
+function rateHit(key, limit, windowMs) {
+  const now = Date.now()
+  let b = RATE_BUCKETS.get(key)
+  if (!b || b.resetAt <= now) {
+    b = { n: 0, resetAt: now + windowMs }
+    RATE_BUCKETS.set(key, b)
+  }
+  b.n += 1
+  return b.n <= limit
+}
+
+// 定期清理过期窗口，防 Map 无界增长
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, b] of RATE_BUCKETS) if (b.resetAt <= now) RATE_BUCKETS.delete(k)
+}, 10 * 60 * 1000).unref()
+
+/** 客户端 IP：优先取代理转发的第一跳 */
+const clientIp = (req) =>
+  String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
+
+// 登录防爆破：同一邮箱连续错 8 次锁 15 分钟；锁定期在密码校验之前判定（正确密码也拒）
+const AUTH_FAILS = new Map() // identity -> { n, lockUntil }
+const AUTH_FAIL_LIMIT = 8
+const AUTH_LOCK_MS = 15 * 60 * 1000
+
+function assertNotLocked(identity) {
+  const rec = AUTH_FAILS.get(identity)
+  if (rec && rec.lockUntil > Date.now()) {
+    const mins = Math.ceil((rec.lockUntil - Date.now()) / 60000)
+    throw new HttpErr(429, `密码错误次数过多，请 ${mins} 分钟后再试`)
+  }
+}
+
+function noteAuthFail(identity) {
+  const rec = AUTH_FAILS.get(identity) ?? { n: 0, lockUntil: 0 }
+  rec.n += 1
+  if (rec.n >= AUTH_FAIL_LIMIT) {
+    rec.lockUntil = Date.now() + AUTH_LOCK_MS
+    rec.n = 0
+  }
+  AUTH_FAILS.set(identity, rec)
+  if (AUTH_FAILS.size > 1000) {
+    // 顺手清扫已过期的锁定记录，防止长期运行无界增长
+    const now = Date.now()
+    for (const [k, v] of AUTH_FAILS) if (v.n === 0 && v.lockUntil <= now) AUTH_FAILS.delete(k)
+  }
+}
+
 const genId = () => {
   const alpha = 'abcdefghijklmnopqrstuvwxyz0123456789'
   let s = ''
@@ -563,11 +617,14 @@ async function handleDelete(table, id, auth) {
 async function handleAuthWithPassword(body) {
   const parsed = vparse(AuthBody, body)
   const identity = parsed.identity.toLowerCase()
+  assertNotLocked(identity)
   const r = await q(`select * from ${tq('users')} where lower(email) = $1`, [identity])
   const user = r.rows[0]
   if (!user || !user.password_hash || !bcrypt.compareSync(parsed.password, user.password_hash)) {
+    noteAuthFail(identity)
     throw new HttpErr(400, 'Failed to authenticate.')
   }
+  AUTH_FAILS.delete(identity)
   const token = signToken({
     id: user.id,
     type: 'auth',
@@ -651,11 +708,16 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { code: 200, message: 'API is healthy.', data: {} })
     }
 
+    // 全局限流：单 IP 固定窗口，防脚本刷爆网关（健康检查不计入）
+    const ip = clientIp(req)
+    if (!rateHit(`g:${ip}`, 1200, 60_000)) throw new HttpErr(429, 'Too Many Requests.')
+
     const auth = await resolveAuth(req)
 
-    // 认证接口
+    // 认证接口（另加单 IP 尝试频次限制，防爆破的第一道闸；身份级锁定见 handleAuthWithPassword）
     let m = path.match(/^\/api\/collections\/users\/auth-with-password\/?$/)
     if (m && req.method === 'POST') {
+      if (!rateHit(`a:${ip}`, 60, 600_000)) throw new HttpErr(429, '尝试次数过多，请稍后再试')
       const out = await handleAuthWithPassword(await readBody(req))
       return send(res, 200, out)
     }
@@ -682,7 +744,13 @@ const server = http.createServer(async (req, res) => {
       }
       if (!id && req.method === 'GET') return send(res, 200, await handleList(table, url, req, auth))
       if (id && req.method === 'GET') return send(res, 200, await handleViewOne(table, id, auth))
-      if (!id && req.method === 'POST') return send(res, 200, await handleCreate(table, await readBody(req), auth))
+      if (!id && req.method === 'POST') {
+        // 注册限流：单 IP 每小时上限，防批量灌号
+        if (table === 'users' && !rateHit(`r:${ip}`, 20, 3_600_000)) {
+          throw new HttpErr(429, '注册尝试过多，请稍后再试')
+        }
+        return send(res, 200, await handleCreate(table, await readBody(req), auth))
+      }
       if (id && (req.method === 'PATCH' || req.method === 'PUT')) {
         return send(res, 200, await handleUpdate(table, id, await readBody(req), auth))
       }
