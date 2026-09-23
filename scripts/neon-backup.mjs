@@ -52,8 +52,17 @@ if (fs.existsSync(uploadsDir) && fs.readdirSync(uploadsDir).length) {
   console.log('附件：uploads/ 为空，跳过归档')
 }
 
-// 3) 保留策略：各类只留最近 KEEP 份
-for (const prefix of ['db-', 'uploads-']) {
+// 3) 代码库全历史打包（bundle 可用 git clone 直接还原；异地容灾仍以推送 GitHub 为准）
+try {
+  const bundleFile = path.join(DIR, `repo-${today}.bundle`)
+  execFileSync('git', ['bundle', 'create', bundleFile, '--all'], { stdio: 'ignore' })
+  console.log(`代码库：全历史 -> ${bundleFile}（${(fs.statSync(bundleFile).size / 1024).toFixed(1)} KB）`)
+} catch {
+  console.log('代码库：git bundle 失败（跳过，不影响数据备份）')
+}
+
+// 4) 保留策略：各类只留最近 KEEP 份
+for (const prefix of ['db-', 'uploads-', 'repo-']) {
   const files = fs
     .readdirSync(DIR)
     .filter((f) => f.startsWith(prefix))
