@@ -47,6 +47,7 @@ export function ReportDialog({ user, onClose }: { user: User | null; onClose: ()
           placeholder="补充说明(选填):发生了什么,让我们更快查清"
           value={note}
           onChange={e => setNote(e.target.value)}
+          maxLength={1000}
         />
         <div className="mt-4 grid grid-cols-2 gap-3">
           <button className="btn-outline !py-2.5" onClick={onClose}>再想想</button>

@@ -349,6 +349,47 @@ test.describe('满员校验与跨行读收紧', () => {
   })
 })
 
+test.describe('输入尺寸护栏', () => {
+  test('超长文本与超量数组被服务端字段级拦截', async ({ request }) => {
+    test.setTimeout(120_000)
+    const stamp = Date.now()
+    const mail = `lim-${stamp}@smoke.test`
+    const reg = await request.post('/api/collections/users/records', {
+      data: { email: mail, password: PASS, passwordConfirm: PASS, name: '护栏员' },
+    })
+    expect(reg.status()).toBe(200)
+    const login = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })).json()
+    const H = { Authorization: login.token }
+    const myId = login.record.id
+
+    // 超长正文（上限 5000 字）→ 字段级 400
+    const long = await request.post('/api/collections/posts/records', {
+      headers: H,
+      data: { sid: `e2e-lim-${stamp}`, author_sid: myId, text: '缘'.repeat(5001), images: [], topic: '', featured: false, at: stamp },
+    })
+    expect(long.status()).toBe(400)
+    expect((await long.json()).data.text.message).toBeTruthy()
+
+    // 超量配图（上限 9 张）→ 字段级 400
+    const manyImgs = await request.post('/api/collections/posts/records', {
+      headers: H,
+      data: { sid: `e2e-lim2-${stamp}`, author_sid: myId, text: '正常文字', images: Array.from({ length: 10 }, (_, i) => `data:,${i}`), topic: '', featured: false, at: stamp },
+    })
+    expect(manyImgs.status()).toBe(400)
+    expect((await manyImgs.json()).data.images.message).toBeTruthy()
+
+    // 正常尺寸不受影响
+    const ok = await request.post('/api/collections/posts/records', {
+      headers: H,
+      data: { sid: `e2e-lim3-${stamp}`, author_sid: myId, text: '正常长度的分享', images: ['data:,0'], topic: '', featured: false, at: stamp },
+    })
+    expect(ok.status()).toBe(200)
+
+    // 清理
+    expect((await request.delete(`/api/collections/users/records/${myId}`, { headers: H })).status()).toBe(204)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })

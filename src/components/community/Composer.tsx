@@ -74,6 +74,7 @@ export function ComposerModal({ open, onClose }: { open: boolean; onClose: () =>
           placeholder="分享此刻的生活与心境,让同频的人看见你…"
           value={text}
           onChange={e => setText(e.target.value)}
+          maxLength={5000}
           autoFocus
         />
         <div>

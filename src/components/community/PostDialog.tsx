@@ -129,6 +129,7 @@ export function PostDialog({ post, onClose }: { post: Post | null; onClose: () =
                 value={comment}
                 onChange={e => setComment(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && submitComment()}
+                maxLength={1000}
               />
               <button className="btn-primary shrink-0 !px-3 !py-1.5" onClick={submitComment} aria-label="发送回帖">
                 <Send size={14} />

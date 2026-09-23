@@ -253,6 +253,7 @@ export function EventDetail({ event, onClose, onEdit }: { event: EventItem | nul
               placeholder="问问发起人,或给同去的伙伴打个气…"
               value={comment}
               onChange={e => setComment(e.target.value)}
+              maxLength={1000}
               onKeyDown={e => {
                 if (e.key === 'Enter' && comment.trim()) {
                   addEventComment(event.id, comment)
@@ -358,6 +359,7 @@ export function EventDetail({ event, onClose, onEdit }: { event: EventItem | nul
             value={contact}
             onChange={e => setContact(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && confirmJoin()}
+            maxLength={200}
           />
           <div className="grid grid-cols-2 gap-3">
             <button className="btn-outline !py-2.5" onClick={() => setJoinOpen(false)}>再想想</button>

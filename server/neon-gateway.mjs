@@ -112,6 +112,27 @@ const WRITE_BLOCKED = { posts: ['likes'], post_comments: ['likes'], event_commen
 // 仅掌柜可写的敏感字段：防止成员改自己的资料行自我提权 / 自我解封
 const ADMIN_ONLY_FIELDS = { profiles: ['role', 'banned'] }
 
+// v1.3 输入尺寸护栏：字段级文本长度 / 数组数量上限（服务端为准，界面 maxLength 与之配套）。
+// 超限返回 PB 风格字段级 400，防止异常客户端写入超大内容拖垮全量同步。
+const TEXT_LIMITS = {
+  posts: { text: 5000, topic: 30 },
+  post_comments: { text: 1000 },
+  event_comments: { text: 1000 },
+  chat_messages: { text: 2000 },
+  profiles: { nickname: 30, bio: 500, job: 50, city: 30, region: 30 },
+  events: { title: 60, desc: 5000, requirements: 1000, city: 30, region: 30, host: 60 },
+  contacts: { text: 200 },
+  reports: { reason: 100, note: 1000 },
+  digests: { title: 40, intro: 300 },
+}
+const ARRAY_LIMITS = {
+  posts: { images: 9 },
+  events: { images: 9, tags: 6 },
+  profiles: { photos: 9, interests: 17 },
+  chat_messages: { images: 9 },
+  digests: { post_sids: 50, covers: 9 },
+}
+
 // ---------- 权限规则（与原数据服务逐条一致） ----------
 
 const A = 'auth' // 任意登录用户
@@ -256,7 +277,7 @@ function toRecord(table, row) {
   return rec
 }
 
-/** 请求体字段 -> DB 列（未知字段、已拆分旧列、非掌柜写敏感字段一律忽略） */
+/** 请求体字段 -> DB 列（未知字段、已拆分旧列、非掌柜写敏感字段一律忽略；超尺寸字段拒绝） */
 function bodyToCols(table, body, auth) {
   const cols = COLUMNS.get(table)
   if (!cols) throw new HttpErr(404, 'The requested resource wasn\'t found.')
@@ -267,6 +288,15 @@ function bodyToCols(table, body, auth) {
     if (!cols.has(col) || HIDDEN.has(col)) continue
     if (WRITE_BLOCKED[table]?.includes(col)) continue
     if (auth?.role !== 'admin' && ADMIN_ONLY_FIELDS[table]?.includes(col)) continue
+    // 尺寸护栏：文本按字符数、数组按元素数（图片 dataURL 只限张数，字节数由 25MB 请求体上限兜底）
+    const tl = TEXT_LIMITS[table]?.[col]
+    if (tl != null && typeof v === 'string' && [...v].length > tl) {
+      throw new HttpErr(400, 'Validation failed.', { [k]: { message: `内容过长（上限 ${tl} 字）` } })
+    }
+    const al = ARRAY_LIMITS[table]?.[col]
+    if (al != null && Array.isArray(v) && v.length > al) {
+      throw new HttpErr(400, 'Validation failed.', { [k]: { message: `数量超限（上限 ${al} 个）` } })
+    }
     out.set(col, v)
   }
   return out

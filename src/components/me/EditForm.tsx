@@ -52,20 +52,20 @@ export function EditForm() {
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="昵称">
-          <input className="input-cn" value={nickname} onChange={e => setNickname(e.target.value)} />
+          <input className="input-cn" value={nickname} onChange={e => setNickname(e.target.value)} maxLength={30} />
         </Field>
         <Field label="身高(cm)">
           <input className="input-cn" type="number" value={height} onChange={e => setHeight(e.target.value)} />
         </Field>
         <Field label="职业">
-          <input className="input-cn" value={job} onChange={e => setJob(e.target.value)} />
+          <input className="input-cn" value={job} onChange={e => setJob(e.target.value)} maxLength={50} />
         </Field>
       </div>
       <Field label="所在地区(省 / 市 / 区县)">
         <CityPicker city={city} region={region} onPick={(c, r) => { setCity(c); setRegion(r) }} />
       </Field>
       <Field label="自我介绍(120 字内)">
-        <textarea className="input-cn min-h-20 resize-y" value={bio} onChange={e => setBio(e.target.value)} />
+        <textarea className="input-cn min-h-20 resize-y" value={bio} onChange={e => setBio(e.target.value)} maxLength={120} />
       </Field>
       <Field label="兴趣爱好(至少 3 项)">
         <div className="flex flex-wrap gap-2">

@@ -246,6 +246,7 @@ export function ChatPanel({ user }: { user: User }) {
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && send()}
+          maxLength={2000}
         />
         <button
           className="btn-primary shrink-0 !px-4 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"

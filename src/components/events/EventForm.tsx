@@ -145,7 +145,7 @@ export function EventForm({ open, initial, onClose }: Props) {
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="mb-1 block text-xs tracking-widest text-muted-foreground">活动名称</label>
-            <input className="input-cn" placeholder="如 桂香茶席 · 秋日场" value={title} onChange={e => setTitle(e.target.value)} />
+            <input className="input-cn" placeholder="如 桂香茶席 · 秋日场" value={title} onChange={e => setTitle(e.target.value)} maxLength={60} />
           </div>
           <div className="sm:col-span-2">
             <label className="mb-1 block text-xs tracking-widest text-muted-foreground">
@@ -286,7 +286,7 @@ export function EventForm({ open, initial, onClose }: Props) {
               一键润色
             </button>
           </label>
-          <textarea className="input-cn min-h-20 resize-y" placeholder="这场活动玩什么、怎么聚,写得动人些" value={desc} onChange={e => setDesc(e.target.value)} />
+          <textarea className="input-cn min-h-20 resize-y" placeholder="这场活动玩什么、怎么聚,写得动人些" value={desc} onChange={e => setDesc(e.target.value)} maxLength={5000} />
         </div>
         <div>
           <label className="mb-1 block text-xs tracking-widest text-muted-foreground">活动要求(可选)</label>
@@ -295,6 +295,7 @@ export function EventForm({ open, initial, onClose }: Props) {
             placeholder="如:需着汉服、限 25-35 岁、自带茶具、活动前需简单自我介绍……"
             value={requirements}
             onChange={e => setRequirements(e.target.value)}
+            maxLength={1000}
           />
         </div>
         <div className="grid grid-cols-2 gap-3 pt-1">
