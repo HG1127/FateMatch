@@ -424,6 +424,134 @@ test.describe('登录防爆破', () => {
   })
 })
 
+test.describe('后端能力补齐', () => {
+  const ADMIN_EMAIL = 'admin@smoke.test'
+  const ADMIN_PASS = 'Admin#2026x'
+
+  test('封禁与拉黑的服务端强制：停用即拒、拉黑断私信与心动、私有行不可冒充', async ({ request }) => {
+    test.setTimeout(240_000)
+    const stamp = Date.now()
+    const mailA = `be-a-${stamp}@smoke.test`
+    const mailB = `be-b-${stamp}@smoke.test`
+    const regA = await request.post('/api/collections/users/records', {
+      data: { email: mailA, password: PASS, passwordConfirm: PASS, name: '后端甲' },
+    })
+    const regB = await request.post('/api/collections/users/records', {
+      data: { email: mailB, password: PASS, passwordConfirm: PASS, name: '后端乙' },
+    })
+    expect(regA.status()).toBe(200)
+    expect(regB.status()).toBe(200)
+    const loginA = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mailA, password: PASS } })).json()
+    const loginB = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mailB, password: PASS } })).json()
+    const HA = { Authorization: loginA.token }
+    const HB = { Authorization: loginB.token }
+    const aId = loginA.record.id
+    const bId = loginB.record.id
+
+    // 乙建自己的资料行（掌柜停用的操作对象）
+    const profB = await request.post('/api/collections/profiles/records', { headers: HB, data: { sid: bId, nickname: '乙' } })
+    expect(profB.status()).toBe(200)
+    const profBId = (await profB.json()).id
+
+    // 防冒充：乙给甲建收藏行被拒（收紧前任意成员可写他人私有行）
+    const forgeFav = await request.post('/api/collections/favorites/records', {
+      headers: HB,
+      data: { sid: `${aId}:users:${bId}`, owner_sid: aId, fav_type: 'users', target_sid: bId, group_name: '' },
+    })
+    expect(forgeFav.status()).toBe(403)
+
+    // 甲拉黑乙：乙的私信与心动被服务端拒绝（此前只有客户端过滤）
+    const blk = await request.post('/api/collections/blocks/records', {
+      headers: HA,
+      data: { sid: `${aId}:${bId}`, owner_sid: aId, target_sid: bId },
+    })
+    expect(blk.status()).toBe(200)
+    const blkId = (await blk.json()).id
+    const chat = await request.post('/api/collections/chat_messages/records', {
+      headers: HB,
+      data: { sid: `m-${stamp}`, sid_a: bId, sid_b: aId, from_sid: bId, text: '在吗', images: [], recalled: false, read_at: 0, at: stamp },
+    })
+    expect(chat.status()).toBe(403)
+    const like = await request.post('/api/collections/user_likes/records', {
+      headers: HB,
+      data: { sid: `${bId}:${aId}`, owner_sid: bId, target_sid: aId },
+    })
+    expect(like.status()).toBe(403)
+
+    // 解除拉黑后恢复正常
+    expect((await request.delete(`/api/collections/blocks/records/${blkId}`, { headers: HA })).status()).toBe(204)
+    const chat2 = await request.post('/api/collections/chat_messages/records', {
+      headers: HB,
+      data: { sid: `m2-${stamp}`, sid_a: bId, sid_b: aId, from_sid: bId, text: '你好呀', images: [], recalled: false, read_at: 0, at: stamp },
+    })
+    expect(chat2.status()).toBe(200)
+
+    // 停用：掌柜标记后登录被拒、旧令牌全拒；恢复后照常
+    const adminLogin = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: ADMIN_EMAIL, password: ADMIN_PASS } })).json()
+    const HAdmin = { Authorization: adminLogin.token }
+    const ban = await request.patch(`/api/collections/profiles/records/${profBId}`, { headers: HAdmin, data: { banned: true } })
+    expect(ban.status()).toBe(200)
+    const loginBanned = await request.post('/api/collections/users/auth-with-password', { data: { identity: mailB, password: PASS } })
+    expect(loginBanned.status()).toBe(403)
+    const favsBanned = await request.get('/api/collections/favorites/records', { headers: HB })
+    expect(favsBanned.status()).toBe(403)
+    const unban = await request.patch(`/api/collections/profiles/records/${profBId}`, { headers: HAdmin, data: { banned: false } })
+    expect(unban.status()).toBe(200)
+    const loginOk = await request.post('/api/collections/users/auth-with-password', { data: { identity: mailB, password: PASS } })
+    expect(loginOk.status()).toBe(200)
+
+    // 清理
+    expect((await request.delete(`/api/collections/users/records/${aId}`, { headers: HA })).status()).toBe(204)
+    expect((await request.delete(`/api/collections/users/records/${bId}`, { headers: { Authorization: (await loginOk.json()).token } })).status()).toBe(204)
+  })
+
+  test('掌柜重置密码、邮箱大小写唯一、深度健康检查', async ({ request }) => {
+    test.setTimeout(240_000)
+    const stamp = Date.now()
+    const mailC = `be-c-${stamp}@smoke.test`
+    const regC = await request.post('/api/collections/users/records', {
+      data: { email: mailC, password: PASS, passwordConfirm: PASS, name: '后端丙' },
+    })
+    expect(regC.status()).toBe(200)
+    const loginC = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mailC, password: PASS } })).json()
+    const HC = { Authorization: loginC.token }
+    const cId = loginC.record.id
+    const adminLogin = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: ADMIN_EMAIL, password: ADMIN_PASS } })).json()
+    const HAdmin = { Authorization: adminLogin.token }
+
+    // 成员调管理端点被拒
+    const resetByMember = await request.post(`/api/admin/users/${cId}/reset-password`, { headers: HC })
+    expect(resetByMember.status()).toBe(403)
+    // 掌柜重置：返回一次性临时密码（12 位）
+    const reset = await request.post(`/api/admin/users/${cId}/reset-password`, { headers: HAdmin })
+    expect(reset.status()).toBe(200)
+    const temp = (await reset.json()).tempPassword as string
+    expect(temp.length).toBe(12)
+    // 旧密码失效，临时密码可登录
+    const oldLogin = await request.post('/api/collections/users/auth-with-password', { data: { identity: mailC, password: PASS } })
+    expect(oldLogin.status()).toBe(400)
+    const tempLogin = await request.post('/api/collections/users/auth-with-password', { data: { identity: mailC, password: temp } })
+    expect(tempLogin.status()).toBe(200)
+
+    // 大小写不同的邮箱视为同一邮箱
+    const mailM = `Mixed-${stamp}@smoke.test`
+    const regM1 = await request.post('/api/collections/users/records', { data: { email: mailM, password: PASS, passwordConfirm: PASS, name: '大小写' } })
+    expect(regM1.status()).toBe(200)
+    const regM2 = await request.post('/api/collections/users/records', { data: { email: mailM.toLowerCase(), password: PASS, passwordConfirm: PASS, name: '大小写' } })
+    expect(regM2.status()).toBe(400)
+    expect((await regM2.json()).data.email.message).toBeTruthy()
+
+    // 深度健康检查：额外探测数据库连通性
+    const deep = await request.get('/api/health?deep=1')
+    expect(deep.status()).toBe(200)
+    expect((await deep.json()).data.db).toBe('ok')
+
+    // 清理（临时密码登录后拿到的新令牌）
+    const tempTok = (await tempLogin.json()).token
+    expect((await request.delete(`/api/collections/users/records/${cId}`, { headers: { Authorization: tempTok } })).status()).toBe(204)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })

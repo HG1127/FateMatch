@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   synced_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users ("email");
--- 登录/查重走 lower(email) 等值匹配，普通索引帮不上，需函数索引
-CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower("email"));
+-- 登录/查重走 lower(email) 等值匹配：唯一函数索引兜底大小写变体并发注册（v1.6）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower("email"));
 
 CREATE TABLE IF NOT EXISTS profiles (
   id text PRIMARY KEY,

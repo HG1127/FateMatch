@@ -5,7 +5,7 @@ import { portrait, scene } from './art'
 import { ALL_CITIES, districtOf } from './region'
 import { getLocalAccount, onLocalAccountChange, logoutLocalAccount } from './localAuth'
 import type { LocalAccount } from './localAuth'
-import { loadWorld, syncWorld, bumpDigestView } from './repo'
+import { loadWorld, syncWorld, bumpDigestView, adminResetPassword } from './repo'
 import type { FestTemplate } from './festivals'
 
 export type Gender = 'male' | 'female'
@@ -448,6 +448,8 @@ interface Store {
   resolveReport: (reportId: string, action: 'ban' | 'dismiss') => boolean
   unbanUser: (uid: string) => boolean
   banUser: (uid: string) => boolean
+  /** 掌柜重置会员密码: 返回一次性临时密码(失败返回 null), 明文只展示一次 */
+  resetMemberPassword: (uid: string) => Promise<string | null>
   /** 掌柜直接替换会员头像, 全站即时生效 */
   adminSetUserPhoto: (uid: string, dataUrl: string) => boolean
   /** 掌柜替换活动封面图 */
@@ -604,8 +606,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setContacts(world.contacts)
           setTour(world.tour)
         }
-      } catch {
-        if (alive) toast.error('数据库连接失败,当前展示临时数据,稍后可刷新重试')
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg.includes('账号已停用')) {
+          // 服务端封禁强制(v1.6):被停用账号的会话直接登出并告知原因
+          logoutLocalAccount()
+          toast.error('该账号已被停用,如有疑问请联系掌柜')
+        } else if (alive) {
+          toast.error('数据库连接失败,当前展示临时数据,稍后可刷新重试')
+        }
       }
       if (alive) setBooted(true)
     }
@@ -1103,6 +1112,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       logOp(`停用账号:${t.nickname}`)
       setUsers(prev => prev.map(u => (u.id === uid ? { ...u, banned: true } : u)))
       return true
+    },
+    async resetMemberPassword(uid) {
+      if (me?.role !== 'admin') return null
+      const t = users.find(u => u.id === uid)
+      try {
+        const temp = await adminResetPassword(uid)
+        // 运营日志只记事件不记明文;明文临时密码仅在界面展示一次
+        logOp(`重置会员密码:${t?.nickname ?? uid}(临时密码仅展示一次)`)
+        return temp
+      } catch {
+        toast.error('重置未成功,请稍后再试')
+        return null
+      }
     },
     adminSetUserPhoto(uid, dataUrl) {
       if (me?.role !== 'admin') return false

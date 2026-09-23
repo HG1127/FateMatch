@@ -171,6 +171,27 @@ const hostOrSelfRead = (f) => async (row, auth) => {
 const HOSTED = 'hosted'
 const HOSTED_FIELD = { checkins: 'owner_sid', contacts: 'user_sid' }
 
+/**
+ * 拉黑语义的服务端强制（v1.6，此前只有客户端过滤，直连接口可绕过）：
+ * 任一方拉黑另一方后，私信与心动都被拒绝；掌柜处置回音不受限。
+ */
+async function assertNoBlock(a, b, auth, msg) {
+  if (!a || !b || a === b) return
+  if (auth?.role === 'admin') return
+  const r = await q(
+    `select 1 from ${tq('blocks')} where (owner_sid = $1 and target_sid = $2) or (owner_sid = $2 and target_sid = $1) limit 1`,
+    [a, b],
+  )
+  if (r.rows[0]) throw new HttpErr(403, msg)
+}
+
+const CREATE_HOOKS = {
+  chat_messages: (data, auth) =>
+    assertNoBlock(String(data.get('sid_a') ?? ''), String(data.get('sid_b') ?? ''), auth, '消息已发出，但被对方拒收了'),
+  user_likes: (data, auth) =>
+    assertNoBlock(String(data.get('owner_sid') ?? ''), String(data.get('target_sid') ?? ''), auth, '对方已将你加入黑名单，无法互动'),
+}
+
 const RULES = {
   users: { list: SELF, view: SELF, create: OPEN, update: SELF, delete: SELF },
   profiles: { list: OPEN, view: OPEN, create: A, update: [me('sid'), ADMIN], delete: ADMIN },
@@ -178,15 +199,15 @@ const RULES = {
   post_comments: { list: OPEN, view: OPEN, create: A, update: [me('author_sid'), ADMIN], delete: [me('author_sid'), ADMIN] },
   events: { list: OPEN, view: OPEN, create: A, update: [me('creator_sid'), ADMIN], delete: [me('creator_sid'), ADMIN] },
   event_comments: { list: OPEN, view: OPEN, create: A, update: eventCommentWrite, delete: eventCommentWrite },
-  chat_messages: { list: A, view: A, create: [me('sid_a'), me('sid_b'), ADMIN], update: [me('sid_a'), me('sid_b'), ADMIN], delete: [me('from_sid'), ADMIN] },
+  chat_messages: { list: [me('sid_a'), me('sid_b'), ADMIN], view: [me('sid_a'), me('sid_b'), ADMIN], create: [me('sid_a'), me('sid_b'), ADMIN], update: [me('sid_a'), me('sid_b'), ADMIN], delete: [me('from_sid'), ADMIN] },
   user_likes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  user_passes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  user_reads: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  favorites: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  fav_groups: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  user_passes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  user_reads: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  favorites: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  fav_groups: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   visits: { list: [me('viewer_sid'), me('viewed_sid'), ADMIN], view: [me('viewer_sid'), me('viewed_sid'), ADMIN], create: [me('viewer_sid')], update: [me('viewer_sid')], delete: [me('viewer_sid'), ADMIN] },
-  blocks: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  reminders: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  blocks: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  reminders: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   checkins: { list: HOSTED, view: hostOrSelfRead('owner_sid'), create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   contacts: { list: HOSTED, view: hostOrSelfRead('user_sid'), create: [me('user_sid')], update: [me('user_sid')], delete: [me('user_sid'), ADMIN] },
   reports: { list: [me('by_sid'), ADMIN], view: [me('by_sid'), ADMIN], create: [me('by_sid')], update: A, delete: ADMIN },
@@ -195,7 +216,7 @@ const RULES = {
   event_attendees: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
   admin_logs: { list: ADMIN, view: ADMIN, create: ADMIN, update: ADMIN, delete: ADMIN },
   site_settings: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: DENY },
-  user_tour: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: A, update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  user_tour: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
 }
 
 // ---------- JWT（HS256，密钥存 Neon gateway_meta，重启不掉登录态） ----------
@@ -375,14 +396,15 @@ function castParam(colType, v) {
   return v
 }
 
-/** 当前请求的登录态：{ id, role } 或 null */
+/** 当前请求的登录态：{ id, role } 或 null（已停用账号直接拒绝，v1.6 服务端强制） */
 async function resolveAuth(req) {
   const raw = req.headers['authorization'] || req.headers['x-pb-auth'] || ''
   const token = String(raw).replace(/^Bearer\s+/i, '').trim()
   if (!token) return null
   const payload = verifyToken(token)
   if (!payload?.id) return null
-  const r = await q(`select role from ${tq('profiles')} where sid = $1 limit 1`, [payload.id])
+  const r = await q(`select role, banned from ${tq('profiles')} where sid = $1 limit 1`, [payload.id])
+  if (r.rows[0]?.banned) throw new HttpErr(403, '账号已停用，如有疑问请联系掌柜')
   return { id: payload.id, role: r.rows[0]?.role === 'admin' ? 'admin' : undefined }
 }
 
@@ -489,6 +511,9 @@ async function handleCreate(table, body, auth) {
   }
   const cols = COLUMNS.get(table)
   const data = bodyToCols(table, body, auth)
+  // 建行业务钩子（如拉黑拦截），先于入库
+  const hook = CREATE_HOOKS[table]
+  if (hook) await hook(data, auth)
   const id = typeof body?.id === 'string' && body.id ? body.id : genId()
 
   if (table === 'users') {
@@ -506,11 +531,19 @@ async function handleCreate(table, body, auth) {
       throw new HttpErr(400, 'Validation failed.', { email: { message: '该邮箱已注册' } })
     }
     const hash = bcrypt.hashSync(parsed.password, 10)
-    await q(
-      `insert into ${tq('users')} (id, email, password_hash, name, avatar, email_visibility, verified, created, updated)
-       values ($1,$2,$3,$4,$5,false,false,now(),now())`,
-      [id, email, hash, String(parsed.name ?? ''), ''],
-    )
+    try {
+      await q(
+        `insert into ${tq('users')} (id, email, password_hash, name, avatar, email_visibility, verified, created, updated)
+         values ($1,$2,$3,$4,$5,false,false,now(),now())`,
+        [id, email, hash, String(parsed.name ?? ''), ''],
+      )
+    } catch (e) {
+      // 大小写变体并发注册撞 lower(email) 唯一索引：转成与查重一致的字段级 400
+      if (e?.code === '23505') {
+        throw new HttpErr(400, 'Validation failed.', { email: { message: '该邮箱已注册' } })
+      }
+      throw e
+    }
   } else if (table === 'event_attendees') {
     // v1.2 满员校验：锁活动行后在同一事务内数人数并插入，
     // 直连接口并发抢最后一个名额时也不会超员（此前校验只在客户端）。
@@ -636,6 +669,9 @@ async function handleAuthWithPassword(body, ip) {
     noteAuthFail(identity, ip)
     throw new HttpErr(400, 'Failed to authenticate.')
   }
+  // 密码正确但已停用：拒绝登录（v1.6 服务端强制，此前只在客户端过滤）
+  const prof = await q(`select banned from ${tq('profiles')} where sid = $1 limit 1`, [user.id])
+  if (prof.rows[0]?.banned) throw new HttpErr(403, '账号已停用，如有疑问请联系掌柜')
   AUTH_FAILS.delete(identity)
   const token = signToken({
     id: user.id,
@@ -673,6 +709,25 @@ async function handleDigestView(sidOrId, auth) {
   )
   if (!r.rows[0]) throw new HttpErr(404, 'The requested resource wasn\'t found.')
   return toRecord('digests', r.rows[0])
+}
+
+/**
+ * 掌柜重置会员密码（v1.6 补齐账号找回路径）：
+ * 生成一次性临时密码（去易混淆字符），落库为哈希，明文只在本次响应返回。
+ * 服务端日志留痕重置事件（不含明文）；运营日志由前端掌柜侧补记。
+ */
+async function handleAdminResetPassword(idOrEmail, auth) {
+  needAuth(auth)
+  if (auth.role !== 'admin') throw new HttpErr(403, 'You are not allowed to perform this operation.')
+  const r = await q(`select id, email from ${tq('users')} where id = $1 or lower(email) = lower($1) limit 1`, [idOrEmail])
+  const user = r.rows[0]
+  if (!user) throw new HttpErr(404, 'The requested resource wasn\'t found.')
+  const alpha = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  let temp = ''
+  for (let i = 0; i < 12; i++) temp += alpha[crypto.randomInt(alpha.length)]
+  await q(`update ${tq('users')} set password_hash = $1, updated = now() where id = $2`, [bcrypt.hashSync(temp, 10), user.id])
+  console.log(`admin-reset-password: target=${user.id} by=${auth.id}`)
+  return { tempPassword: temp }
 }
 
 // ---------- HTTP 层 ----------
@@ -720,6 +775,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return send(res, 204, null)
 
     if (path === '/api/health' || path === '/api/health/') {
+      // deep=1 时探活数据库连接（运维/监控用），DB 故障会自然落到 500
+      if (url.searchParams.get('deep')) {
+        await q('select 1')
+        return send(res, 200, { code: 200, message: 'API is healthy.', data: { db: 'ok' } })
+      }
       return send(res, 200, { code: 200, message: 'API is healthy.', data: {} })
     }
 
@@ -746,6 +806,13 @@ const server = http.createServer(async (req, res) => {
     m = path.match(/^\/api\/collections\/digests\/records\/([^/]+)\/view\/?$/)
     if (m && req.method === 'POST') {
       const out = await handleDigestView(decodeURIComponent(m[1]), auth)
+      return send(res, 200, out)
+    }
+
+    // 掌柜重置会员密码（仅 admin，返回一次性临时密码）
+    m = path.match(/^\/api\/admin\/users\/([^/]+)\/reset-password\/?$/)
+    if (m && req.method === 'POST') {
+      const out = await handleAdminResetPassword(decodeURIComponent(m[1]), auth)
       return send(res, 200, out)
     }
 

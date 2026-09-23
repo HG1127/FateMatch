@@ -7,6 +7,7 @@ import { countTables, exportBackup } from '@/lib/dataExport'
 import type { DataStat } from '@/lib/dataExport'
 import { FESTS, FEST_TEMPLATE } from '@/lib/festivals'
 import type { FestTemplate } from '@/lib/festivals'
+import { Modal } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 const FEST_NAMES = [...new Set(Object.values(FESTS))]
@@ -32,7 +33,7 @@ function loadDigestDraft(): DigestDraft | null {
 }
 
 export function AdminPage() {
-  const { me, settings, saveSettings, events, posts, users, togglePostFeatured, removePost, reports, resolveReport, match, unbanUser, banUser, adminLogs, digests, publishDigest, removeDigest, adminSetUserPhoto, adminSetEventCover, adminSetPostImages, deleteEventComment, removeComment, adminEditPostText, purgeChatImages } = useStore()
+  const { me, settings, saveSettings, events, posts, users, togglePostFeatured, removePost, reports, resolveReport, match, unbanUser, banUser, resetMemberPassword, adminLogs, digests, publishDigest, removeDigest, adminSetUserPhoto, adminSetEventCover, adminSetPostImages, deleteEventComment, removeComment, adminEditPostText, purgeChatImages } = useStore()
   const [draft, setDraft] = useState<Settings>(() => structuredClone(settings))
   const [confirmBan, setConfirmBan] = useState('')
   const [digestTitle, setDigestTitle] = useState(() => loadDigestDraft()?.title ?? '')
@@ -102,6 +103,8 @@ export function AdminPage() {
   })
   const [qMember, setQMember] = useState('')
   const [confirmMemberBan, setConfirmMemberBan] = useState('')
+  const [confirmResetPw, setConfirmResetPw] = useState('')
+  const [resetPwResult, setResetPwResult] = useState<{ nick: string; temp: string } | null>(null)
   const [confirmPostDel, setConfirmPostDel] = useState('')
   const [confirmCommentDel, setConfirmCommentDel] = useState('')
   const [commentView, setCommentView] = useState<'event' | 'post'>('event')
@@ -1128,6 +1131,31 @@ export function AdminPage() {
             value={qMember}
             onChange={e => setQMember(e.target.value)}
           />
+          {resetPwResult && (
+            <Modal open onClose={() => setResetPwResult(null)}>
+              <div className="space-y-4 p-5 md:p-6">
+                <h3 className="font-xing text-xl text-foreground">临时密码已生成</h3>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  请通过可靠渠道把临时密码交给「{resetPwResult.nick}」,提醒 TA 登录后立即改成自己的密码。明文只展示这一次,系统不留存。
+                </p>
+                <p className="select-all rounded-md border border-border bg-secondary/40 p-3 text-center font-mono text-base tracking-widest text-foreground">{resetPwResult.temp}</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button className="btn-outline !py-2.5" onClick={() => setResetPwResult(null)}>关闭</button>
+                  <button
+                    className="btn-primary !py-2.5"
+                    onClick={() => {
+                      navigator.clipboard
+                        ?.writeText(resetPwResult.temp)
+                        .then(() => toast.success('临时密码已复制'))
+                        .catch(() => toast.error('复制失败,请手动选择复制'))
+                    }}
+                  >
+                    复制密码
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )}
           <div className="space-y-2">
             {users
               .filter(u => !u.role)
@@ -1151,6 +1179,29 @@ export function AdminPage() {
                     <ImagePlus size={12} />
                     换头像
                   </button>
+                  {confirmResetPw === u.id ? (
+                    <>
+                      <button
+                        className="btn-primary shrink-0 !px-3 !py-1.5 text-xs"
+                        onClick={async () => {
+                          const temp = await resetMemberPassword(u.id)
+                          setConfirmResetPw('')
+                          if (temp) setResetPwResult({ nick: u.nickname, temp })
+                        }}
+                      >
+                        确认重置
+                      </button>
+                      <button className="btn-outline shrink-0 !px-3 !py-1.5 text-xs" onClick={() => setConfirmResetPw('')}>再想想</button>
+                    </>
+                  ) : (
+                    <button
+                      className="btn-outline shrink-0 !px-3 !py-1.5 text-xs"
+                      title="会员忘记密码时:生成一次性临时密码,交会员登录后自改"
+                      onClick={() => setConfirmResetPw(u.id)}
+                    >
+                      重置密码
+                    </button>
+                  )}
                   {u.banned ? (
                     <button
                       className="btn-outline shrink-0 !px-3 !py-1.5 text-xs"

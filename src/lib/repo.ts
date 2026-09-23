@@ -527,3 +527,12 @@ export async function changeAccountPassword(oldPassword: string, password: strin
   if (!rec) throw new Error('not logged in')
   await pb.collection('users').update(rec.id, { oldPassword, password, passwordConfirm: password })
 }
+
+/** 掌柜专用:重置会员登录密码,返回一次性临时密码(明文仅此一次返回,不落任何日志) */
+export async function adminResetPassword(userId: string): Promise<string> {
+  const out = (await pb.send(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, { method: 'POST' })) as {
+    tempPassword?: string
+  }
+  if (!out?.tempPassword) throw new Error('reset failed')
+  return out.tempPassword
+}
