@@ -61,7 +61,7 @@ const BADGES: Array<{ key: keyof Verification; label: string; icon: typeof Shiel
 export function VerifyBadges({ v, dim }: { v: Verification; dim?: boolean }) {
   const done = BADGES.filter(b => v[b.key]).length
   return (
-    <span className="inline-flex items-center gap-1" title={`已通过 ${done}/3 项验证`}>
+    <span className="inline-flex items-center gap-1" title={`已记录 ${done}/3 项核验状态`}>
       {BADGES.map(b => {
         const Icon = b.icon
         const ok = v[b.key]

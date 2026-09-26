@@ -2,17 +2,12 @@ import { Link } from 'react-router-dom'
 import { HeartHandshake, Sparkles } from 'lucide-react'
 import { ageOf, useStore } from '@/lib/store'
 
-const STATS = [
-  { num: '128,600', label: '累计牵线成功' },
-  { num: '1,024', label: '今日新增随缘' },
-  { num: '100%', label: '会员三重验证' },
-  { num: '86', label: '覆盖城市' },
-]
+const PILLARS = ['每日少量推荐', '兴趣与城市参考', '双方有意后聊天', '线下活动延伸']
 
 export function Hero() {
   const { users, me } = useStore()
   // 主视觉展示汉服/古装扮相的会员, 与古典气质呼应
-  const picks = ['u01', 'u03', 'u09'].map(id => users.find(u => u.id === id)).filter(Boolean) as typeof users
+  const picks = users.filter(u => !u.role).slice(0, 3)
   const joins = '/auth?mode=register'
 
   return (
@@ -29,7 +24,7 @@ export function Hero() {
             皆是<span className="text-gold-soft">缘</span>
           </h1>
           <p className="mt-5 max-w-md text-base leading-relaxed text-primary-foreground/80">
-            随缘网,面向成年人的真诚交友平台。资料三重验证、每日随缘分配、兴趣爱好匹配——把相逢交给缘分,把认真留给自己。
+            随缘网,面向成年人的认真交往社区。资料由本人填写,核验状态按实际记录展示；用少量推荐、兴趣和同城场景帮助双方慢慢了解。
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link to={me ? '/yuanfen' : joins} className="btn-gold !px-7 !py-3 !text-base transition hover:-translate-y-0.5 hover:shadow-lift active:scale-[.97]">
@@ -41,7 +36,7 @@ export function Hero() {
               看看兴趣匹配
             </Link>
           </div>
-          <p className="mt-6 text-xs text-primary-foreground/55">仅限 18 周岁以上成年人注册 · 资料隐私全程保护</p>
+          <p className="mt-6 text-xs text-primary-foreground/55">仅供 18 周岁以上成年人使用 · 进入真人推荐前需确认必要资料</p>
         </div>
 
         <div className="relative hidden h-[420px] md:block">
@@ -72,10 +67,10 @@ export function Hero() {
 
       <div className="relative border-t border-gold-soft/25 bg-red-ink/50">
         <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 py-8 md:grid-cols-4">
-          {STATS.map(s => (
-            <div key={s.label} className="text-center">
-              <p className="font-xing text-3xl text-gold-soft md:text-4xl">{s.num}</p>
-              <p className="mt-1 text-xs tracking-widest text-primary-foreground/60">{s.label}</p>
+          {PILLARS.map((label, i) => (
+            <div key={label} className="text-center">
+              <p className="font-xing text-2xl text-gold-soft md:text-3xl">{String(i + 1).padStart(2, '0')}</p>
+              <p className="mt-1 text-xs tracking-widest text-primary-foreground/70">{label}</p>
             </div>
           ))}
         </div>

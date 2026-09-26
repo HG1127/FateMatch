@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { Hourglass, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStore } from '@/lib/store'
+import { isProfileReadyForMatching, useStore } from '@/lib/store'
 import type { User } from '@/lib/store'
 import { regionOf } from '@/lib/region'
 import { YuanfenCard } from '@/components/yuanfen/YuanfenCard'
 import { MatchModal } from '@/components/MatchModal'
 
 export function YuanfenPage() {
-  const { dailyYuanfen, like, unlike, pass, unpass, markTour, candidates, matchScore, icebreakerFor, sendChat, me, match } = useStore()
-  const nav = useNavigate()
+  const { dailyYuanfen, like, unlike, pass, unpass, markTour, matchScore, me, match } = useStore()
   // 今日三位有缘人进页即锁定, 掠过/有意不改变名单, 可自由前后翻看
   const [list] = useState(() => dailyYuanfen())
   const [idx, setIdx] = useState(0)
@@ -29,12 +28,11 @@ export function YuanfenPage() {
     [list, sortByMatch, matchScore],
   )
 
-  const best = useMemo(() => {
-    const arr = candidates()
-    if (!arr.length) return null
-    return [...arr].sort((a, b) => matchScore(b) - matchScore(a))[0]
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, matchScore, me?.interests.length])
+  const best = useMemo(
+    () => (list.length ? [...list].sort((a, b) => matchScore(b) - matchScore(a))[0] : null),
+    [list, matchScore],
+  )
+  const profileReady = !!me && isProfileReadyForMatching(me)
 
   useEffect(() => {
     markTour('yuanfen')
@@ -104,12 +102,11 @@ export function YuanfenPage() {
           <button
             className="btn-gold shrink-0 !px-4 !py-2 text-xs transition hover:shadow-lift active:scale-95"
             onClick={() => {
-              sendChat(best.id, icebreakerFor(best))
-              toast.success('开场白已送达,去佳音里等回音吧')
-              nav('/matches')
+              const bestIndex = order.findIndex(u => u.id === best.id)
+              if (bestIndex >= 0) setIdx(bestIndex)
             }}
           >
-            送声招呼
+            看这位
           </button>
         </div>
       )}
@@ -191,21 +188,22 @@ export function YuanfenPage() {
       ) : (
         <div className="card-cn mx-auto max-w-md rounded-lg p-10 text-center">
           <span className="seal mx-auto flex h-14 w-14 font-xing text-2xl">缘</span>
-          <h3 className="mt-4 font-xing text-2xl text-foreground">今日缘分已看完</h3>
+          <h3 className="mt-4 font-xing text-2xl text-foreground">{profileReady ? '暂时没有符合条件的缘分' : '先确认必要资料'}</h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            缘分不宜贪杯,明日再来。或去兴趣匹配,主动寻一位知音。
+            {profileReady
+              ? '当前推荐池没有满足双方必要条件的人。你可以稍后再来，或调整自己的真实资料。'
+              : '确认性别、希望认识的对象、出生日期与所在城市后，才会进入真人推荐。'}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <button className="btn-outline" onClick={() => setIdx(0)}>回头看看</button>
-            <Link to="/explore" className="btn-primary">去兴趣匹配</Link>
-            <Link to="/matches" className="btn-outline">查看佳音</Link>
+            <Link to="/me" className="btn-primary">{profileReady ? '检查我的资料' : '去完善资料'}</Link>
+            {profileReady && <Link to="/matches" className="btn-outline">查看佳音</Link>}
           </div>
         </div>
       )}
 
       <p className="mt-8 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
         <Hourglass size={12} />
-        每日零点更新 · 双方「有意」即结为佳音
+        推荐只展示满足当前必要条件的真人候选 · 双方真实「有意」才结为佳音
       </p>
 
       <MatchModal user={matched} open={!!matched} onClose={() => setMatched(null)} />

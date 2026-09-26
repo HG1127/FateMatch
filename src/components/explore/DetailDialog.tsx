@@ -21,7 +21,7 @@ const FATE_SLIPS = [
 import { cn } from '@/lib/utils'
 
 export function DetailDialog({ user, onClose }: { user: User | null; onClose: () => void }) {
-  const { me, matchScore, matchParts, like, isMutual, sendChat, isFav, toggleFav, recordVisit, isBlocked, toggleBlock, icebreakerFor, match, posts } = useStore()
+  const { me, matchScore, matchParts, like, isMutual, isFav, toggleFav, recordVisit, isBlocked, toggleBlock, match, posts } = useStore()
   const nav = useNavigate()
   const [pic, setPic] = useState(0)
   const [reportOpen, setReportOpen] = useState(false)
@@ -69,12 +69,12 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
             <div>
               <h3 className="font-xing text-3xl text-foreground">
                 {user.nickname}
-                <span className="cjk-latin ml-2 text-lg text-gold">{ageOf(user.birthDate)}</span>
+                {ageOf(user.birthDate) > 0 && <span className="cjk-latin ml-2 text-lg text-gold">{ageOf(user.birthDate)}</span>}
               </h3>
               <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-0.5"><MapPin size={11} />{regionOf(user)}</span>
-                <span className="inline-flex items-center gap-0.5"><Briefcase size={11} />{user.job}</span>
-                <span className="inline-flex items-center gap-0.5"><Ruler size={11} /><span className="cjk-latin">{user.height}</span>cm</span>
+                {regionOf(user) && <span className="inline-flex items-center gap-0.5"><MapPin size={11} />{regionOf(user)}</span>}
+                {user.job && <span className="inline-flex items-center gap-0.5"><Briefcase size={11} />{user.job}</span>}
+                {user.height > 0 && <span className="inline-flex items-center gap-0.5"><Ruler size={11} /><span className="cjk-latin">{user.height}</span>cm</span>}
               </p>
             </div>
             <div className="flex flex-col items-end gap-1.5">
@@ -95,19 +95,9 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
             </div>
           </div>
           <VerifyBadges v={user.verification} />
-          <div className="flex items-center gap-2 rounded-md border border-gold/40 bg-gold/10 px-3 py-2">
-            <p className="min-w-0 flex-1 text-xs leading-relaxed text-gold">缘分签 · {slip}</p>
-            <button
-              className="shrink-0 rounded-full border border-gold/60 px-2 py-0.5 text-[10px] text-gold transition hover:bg-gold/20"
-              onClick={() => {
-                sendChat(user.id, `我为咱俩求了支缘分签:「${slip}」——你信缘吗?`)
-                toast.success('签文已作招呼送达')
-                onClose()
-                nav(`/matches?with=${user.id}`)
-              }}
-            >
-              送这支签
-            </button>
+          <div className="rounded-md border border-gold/40 bg-gold/10 px-3 py-2">
+            <p className="text-xs leading-relaxed text-gold">缘分签 · {slip}</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">签文仅作轻松参考，不会自动代你向对方发送任何内容。</p>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {(() => {
@@ -206,16 +196,16 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
                     {mutual ? '互道有意 · 去佳音' : iLiked ? '有意 · 待佳音' : '有意'}
                   </button>
                   <button
-                    className="btn-gold !py-3"
+                    className={mutual ? 'btn-gold !py-3' : 'btn-outline !py-3 opacity-70'}
+                    disabled={!mutual}
                     onClick={() => {
-                      sendChat(user.id, icebreakerFor(user))
-                      toast.success('问候已送达')
+                      if (!mutual) return
                       onClose()
                       nav(`/matches?with=${user.id}`)
                     }}
                   >
                     <MessageCircleHeart size={16} />
-                    送声招呼
+                    {mutual ? '去佳音聊聊' : '互道有意后可聊天'}
                   </button>
                 </div>
                 <div className="flex items-center justify-center gap-2 text-[11px]">

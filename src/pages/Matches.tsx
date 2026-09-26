@@ -21,7 +21,7 @@ export function MatchesPage() {
   const [profile, setProfile] = useState<User | null>(null)
   const [reportFor, setReportFor] = useState<User | null>(null)
 
-  const active = users.find(u => u.id === selectedId)
+  const active = users.find(u => u.id === selectedId && isMutual(u.id))
 
   if (!me) return null
 
@@ -36,15 +36,10 @@ export function MatchesPage() {
       <div className="clouds-paper mx-auto max-w-md px-4 py-20 text-center">
         <span className="seal mx-auto flex h-14 w-14 font-xing text-2xl">音</span>
         <h1 className="mt-4 font-xing text-3xl text-foreground">暂无佳音</h1>
-        <p className="mt-2 text-sm text-muted-foreground">主动开个口,或去随缘分配看看今日的缘。</p>
-        <div className="mt-6 flex justify-center gap-3">
-          <button className="btn-gold transition active:scale-95" onClick={() => setPickerOpen(true)}>
-            <MessageSquarePlus size={15} />
-            发起新对话
-          </button>
-          <Link to="/yuanfen" className="btn-outline"><Sparkles size={15} />去随缘分配</Link>
+        <p className="mt-2 text-sm text-muted-foreground">双方真实互道「有意」后，会在这里开启佳音。</p>
+        <div className="mt-6 flex justify-center">
+          <Link to="/yuanfen" className="btn-primary"><Sparkles size={15} />去看今日推荐</Link>
         </div>
-        <NewChatPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onPick={u => { setSelectedId(u.id); setPickerOpen(false) }} />
       </div>
     )
   }
@@ -58,7 +53,7 @@ export function MatchesPage() {
       <div className="mb-8 text-center">
         <p className="text-xs tracking-[.4em] text-gold">我的佳音</p>
         <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">往来与佳音</h1>
-        <p className="mt-2 text-sm text-muted-foreground">打过招呼、道过有意的人都在这里 · 点头像看资料,点卡片进聊天</p>
+        <p className="mt-2 text-sm text-muted-foreground">这里只展示双方真实互道「有意」的关系 · 点头像看资料,点卡片进入聊天</p>
       </div>
 
       {unreadConvs.length > 0 && (
@@ -86,7 +81,7 @@ export function MatchesPage() {
         <div className="space-y-3">
           <button className="btn-gold w-full" onClick={() => setPickerOpen(true)}>
             <MessageSquarePlus size={16} />
-            发起新对话
+            选择互配对象
           </button>
           <div className="flex gap-2 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
             {active && !list.some(c => c.user.id === active.id) && (
@@ -192,7 +187,7 @@ export function MatchesPage() {
               <span className="seal flex h-12 w-12 font-xing text-xl">聊</span>
               <p className="text-sm text-muted-foreground">点头像看资料,点卡片进入聊天</p>
               <button className="btn-gold mt-1" onClick={() => setPickerOpen(true)}>
-                发起新对话
+                选择互配对象
               </button>
             </div>
           )}

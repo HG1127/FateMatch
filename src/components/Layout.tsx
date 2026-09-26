@@ -205,7 +205,7 @@ export function Layout() {
             <p className="mb-3 font-xing text-lg text-gold-soft">温馨提示</p>
             <ul className="space-y-2 text-primary-foreground/70">
               <li>· 本平台仅面向 18 周岁以上成年人</li>
-              <li>· 所有会员资料均通过三重验证审核</li>
+              <li>· 核验状态按实际记录展示,未核验信息不作平台背书</li>
               <li>· 请保护个人隐私,谨防财物往来</li>
             </ul>
           </div>

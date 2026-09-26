@@ -6,22 +6,22 @@ import { regionOf } from '@/lib/region'
 import { AvatarFrame, MatchRing, Modal } from '@/components/ui'
 
 export function NewChatPicker({ open, onClose, onPick }: { open: boolean; onClose: () => void; onPick: (u: User) => void }) {
-  const { candidates, matchScore, me } = useStore()
+  const { mutuals, matchScore, me } = useStore()
   const [q, setQ] = useState('')
 
   const list = useMemo(() => {
-    let arr = candidates()
+    let arr = mutuals()
     const kw = q.trim()
     if (kw) arr = arr.filter(u => u.nickname.includes(kw) || regionOf(u).includes(kw) || u.job.includes(kw))
     return [...arr].sort((a, b) => matchScore(b) - matchScore(a))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, q])
+  }, [mutuals, q])
 
   return (
     <Modal open={open} onClose={onClose} wide>
       <div className="p-5 md:p-6">
-        <h3 className="font-xing text-2xl text-foreground">发起新对话</h3>
-        <p className="mt-1 text-xs text-muted-foreground">选一位有缘人开口问候,聊天记录会自动保存在佳音里</p>
+        <h3 className="font-xing text-2xl text-foreground">选择一段佳音</h3>
+        <p className="mt-1 text-xs text-muted-foreground">只有双方真实互道「有意」后，才可在这里继续交流。</p>
         <div className="relative mt-4">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input className="input-cn !pl-8" placeholder="搜索昵称 / 城市 / 职业" value={q} onChange={e => setQ(e.target.value)} />
@@ -47,12 +47,12 @@ export function NewChatPicker({ open, onClose, onPick }: { open: boolean; onClos
                 </div>
                 <MatchRing value={matchScore(u)} size={40} />
                 <button className="btn-primary shrink-0 !px-3 !py-1.5 text-xs" onClick={e => { e.stopPropagation(); onPick(u) }}>
-                  发起聊天
+                  进入聊天
                 </button>
               </div>
             )
           })}
-          {!list.length && <p className="py-10 text-center text-sm text-muted-foreground">没有找到对应的人,换个关键词试试</p>}
+          {!list.length && <p className="py-10 text-center text-sm text-muted-foreground">暂无符合搜索条件的互配对象</p>}
         </div>
       </div>
     </Modal>

@@ -9,7 +9,7 @@ import { loadWorld, syncWorld, bumpDigestView, adminResetPassword, refreshChats 
 import { uploadImage } from './upload'
 import type { FestTemplate } from './festivals'
 
-export type Gender = 'male' | 'female'
+export type Gender = 'male' | 'female' | 'unknown'
 
 export interface Verification {
   phone: boolean
@@ -206,12 +206,18 @@ export function hashStr(s: string): number {
 }
 
 export function ageOf(birthDate: string): number {
+  if (!birthDate) return 0
   const b = new Date(birthDate)
+  if (Number.isNaN(b.getTime())) return 0
   const now = new Date()
   let a = now.getFullYear() - b.getFullYear()
   const m = now.getMonth() - b.getMonth()
   if (m < 0 || (m === 0 && now.getDate() < b.getDate())) a--
-  return a
+  return a > 0 ? a : 0
+}
+
+export function isProfileReadyForMatching(u: User): boolean {
+  return u.gender !== 'unknown' && u.seeking !== 'unknown' && !!u.birthDate && !!u.city && ageOf(u.birthDate) >= 18
 }
 
 /** 距活动日期还有几天(当天为 0,已过期为负) */
@@ -222,34 +228,34 @@ export function daysUntil(date: string): number {
   return Math.round((d.getTime() - today.getTime()) / 86400_000)
 }
 
-/** 资料完善度:0-100 分,附待补项提示 */
+/** 资料完善度:0-100 分,只统计本人可确认的资料; 核验状态不计入资料分 */
 export function completeness(u: User): { pct: number; tips: Array<{ text: string; pts: number; to?: string }> } {
   const tips: Array<{ text: string; pts: number; to?: string }> = []
   let score = 0
-  // 照片 25 分
+
+  const basics = [u.gender !== 'unknown', u.seeking !== 'unknown', ageOf(u.birthDate) >= 18, !!u.city]
+  const basePts = Math.round((basics.filter(Boolean).length / basics.length) * 35)
+  score += basePts
+  if (basePts < 35) tips.push({ text: '确认性别、期待认识对象、出生日期和所在城市后才进入推荐池', pts: 35 - basePts, to: '/me' })
+
   const n = u.photos.length
-  const pPts = n >= 3 ? 25 : n === 2 ? 18 : n === 1 ? 10 : 0
+  const pPts = n >= 3 ? 20 : n === 2 ? 14 : n === 1 ? 8 : 0
   score += pPts
-  if (pPts < 25) tips.push({ text: n === 0 ? '上传照片,让有缘人先看见你' : '再补几张照片(3 张以上),印象更立体', pts: 25 - pPts })
-  // 自我介绍 25 分
+  if (pPts < 20) tips.push({ text: n === 0 ? '上传照片,让有缘人先看见你' : '再补几张照片(3 张以上),印象更立体', pts: 20 - pPts })
+
   const bio = u.bio.trim()
-  const emptyBio = !bio || bio === '这个人很神秘,还没写自我介绍。'
-  const bPts = emptyBio ? 0 : bio.length >= 30 ? 25 : bio.length >= 10 ? 15 : 8
+  const bPts = !bio ? 0 : bio.length >= 30 ? 20 : bio.length >= 10 ? 12 : 6
   score += bPts
-  if (bPts < 25) tips.push({ text: emptyBio ? '写一段走心的自我介绍,30 字以上更佳' : '自我介绍再丰富些,可用一键润色帮帮忙', pts: 25 - bPts })
-  // 兴趣爱好 15 分
+  if (bPts < 20) tips.push({ text: !bio ? '写一段真实的自我介绍,30 字以上更佳' : '自我介绍再丰富些', pts: 20 - bPts })
+
   const iPts = u.interests.length >= 5 ? 15 : u.interests.length >= 3 ? 8 : 0
   score += iPts
   if (iPts < 15) tips.push({ text: '多勾选几个兴趣爱好,让同好更容易找到你', pts: 15 - iPts })
-  // 三重验证 25 分
-  const v = Object.values(u.verification).filter(Boolean).length
-  const vPts = v * 8 + (v === 3 ? 1 : 0)
-  score += vPts
-  if (vPts < 25) tips.push({ text: '完成三重验证,点亮徽章、优先展示', pts: 25 - vPts, to: '/verify' })
-  // 职业 10 分
-  const jPts = u.job && u.job !== '保密' ? 10 : 0
+
+  const jPts = u.job.trim() ? 10 : 0
   score += jPts
-  if (jPts < 10) tips.push({ text: '填写职业信息,聊天更好开口', pts: 10 - jPts })
+  if (jPts < 10) tips.push({ text: '愿意的话填写职业信息,聊天更好开口', pts: 10 - jPts })
+
   return { pct: Math.min(100, score), tips }
 }
 
@@ -398,7 +404,6 @@ interface Store {
   sendChat: (otherId: string, text: string, images?: string[]) => void
   /** 拉取服务端会话并合并（聊天面板打开期间轮询，v1.9 准实时私信） */
   pollChats: () => Promise<void>
-  pushReply: (otherId: string, text: string) => void
   posts: Post[]
   events: EventItem[]
   publish: (text: string, images: string[], topic: string) => void
@@ -481,6 +486,8 @@ interface Store {
 }
 
 const SEED_IDS = new Set(seedUsers().map(u => u.id))
+const SEED_POST_IDS = new Set(seedPosts().map(p => p.id))
+const SEED_EVENT_IDS = new Set(seedEvents().map(e => e.id))
 
 /** 数据库版本优先, 补齐缺漏的官方种子行(自愈) */
 function mergeById<T extends { id: string }>(db: T[], seed: T[]): T[] {
@@ -488,20 +495,20 @@ function mergeById<T extends { id: string }>(db: T[], seed: T[]): T[] {
   return [...db, ...seed.filter(s => !ids.has(s.id))]
 }
 
-/** 由自建账号生成会员档案(首个真实账号成为掌柜) */
+/** 由自建账号生成会员档案。未知个人事实保持未知,由本人确认后再用于推荐。 */
 function makeMember(acc: LocalAccount, firstAdmin: boolean): User {
   return {
     id: acc.id,
     phone: '',
     password: '',
     nickname: acc.name || acc.email.split('@')[0],
-    gender: 'female',
-    seeking: 'male',
-    birthDate: '1995-01-01',
-    city: '杭州',
-    height: 165,
-    job: '自由职业',
-    bio: '初来随缘网,请多关照。',
+    gender: 'unknown',
+    seeking: 'unknown',
+    birthDate: '',
+    city: '',
+    height: 0,
+    job: '',
+    bio: '',
     interests: [],
     photos: [portrait((acc.name || acc.email)[0] ?? '缘', '#8f1d2c', '#d9a05b', 'moon')],
     verification: { phone: false, realname: false, photo: false },
@@ -593,9 +600,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           world = await loadWorld(account.id)
         }
         if (!alive) return
-        if (world.users.length) setUsers(mergeById(world.users, seedUsers()))
-        if (world.posts.length) setPosts(mergeById(world.posts, seedPosts()))
-        if (world.events.length) setEvents(mergeById(world.events, seedEvents()))
+        if (account) {
+          // 登录后的业务世界只保留真实数据库记录; 演示人物/帖子/活动不进入真人互动池。
+          setUsers(world.users.filter(u => !SEED_IDS.has(u.id)))
+          setPosts(world.posts.filter(p => !SEED_POST_IDS.has(p.id) && !SEED_IDS.has(p.authorId)))
+          setEvents(world.events.filter(e => !SEED_EVENT_IDS.has(e.id)))
+        } else {
+          // 游客只看明确的本地演示内容, 不把真实会员公开资料当营销素材。
+          setUsers(seedUsers())
+          setPosts(seedPosts())
+          setEvents(seedEvents())
+        }
         if (world.settings) setSettings(world.settings)
         if (world.digests.length) setDigests(world.digests)
         setReports(world.reports)
@@ -707,8 +722,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!mine.includes(otherId)) {
         setMatch(prev => ({ ...prev, likes: { ...prev.likes, [me.id]: [...(prev.likes[me.id] ?? []), otherId] } }))
       }
-      const back = (match.likes[otherId] ?? []).includes(me.id) || hashStr(me.id + otherId) % 10 < 6
-      return back
+      // mutual 只能来自对方真实存在的反向 like 记录, 不再用哈希模拟“对方也有意”。
+      return (match.likes[otherId] ?? []).includes(me.id)
     },
     unlike(otherId) {
       if (!me) return
@@ -729,23 +744,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     conversations() {
       if (!me) return []
+      const mine = match.likes[me.id] ?? []
+      const mutualIds = new Set(mine.filter(id => (match.likes[id] ?? []).includes(me.id)))
       const out: Array<{ user: User; lastAt: number; lastText: string; lastFrom: string; liked: boolean }> = []
       for (const [key, msgs] of Object.entries(match.chats)) {
         const [a, b] = key.split(':')
         if (a !== me.id && b !== me.id) continue
         const otherId = a === me.id ? b : a
+        if (!mutualIds.has(otherId)) continue
         const u = users.find(x => x.id === otherId)
         if (!u || !msgs.length) continue
         const last = msgs[msgs.length - 1]
-        out.push({ user: u, lastAt: last.at, lastText: last.text, lastFrom: last.from, liked: false })
+        out.push({ user: u, lastAt: last.at, lastText: last.text, lastFrom: last.from, liked: true })
       }
-      const mine = match.likes[me.id] ?? []
       for (const u of users) {
-        if (mine.includes(u.id) && !out.some(o => o.user.id === u.id)) {
+        if (mutualIds.has(u.id) && !out.some(o => o.user.id === u.id)) {
           out.push({ user: u, lastAt: 0, lastText: '', lastFrom: '', liked: true })
         }
       }
-      return out.map(o => ({ ...o, liked: o.liked || mine.includes(o.user.id) })).sort((x, y) => y.lastAt - x.lastAt)
+      return out.sort((x, y) => y.lastAt - x.lastAt)
     },
     unread(otherId) {
       if (!me) return 0
@@ -784,19 +801,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     sendChat(otherId, text, images) {
       if (!me) return
+      const mutual = (match.likes[me.id] ?? []).includes(otherId) && (match.likes[otherId] ?? []).includes(me.id)
+      if (!mutual) return
       const key = [me.id, otherId].sort().join(':')
       const msg: ChatMsg = { id: `${Date.now()}`, from: me.id, text, at: Date.now(), images: images?.length ? images : undefined }
       setMatch(prev => ({ ...prev, chats: { ...prev.chats, [key]: [...(prev.chats[key] ?? []), msg] } }))
-    },
-    pushReply(otherId, text) {
-      if (!me) return
-      const key = [me.id, otherId].sort().join(':')
-      const msg: ChatMsg = { id: `${Date.now()}r`, from: otherId, text, at: Date.now() }
-      // 对方回信即视为已读我方此前的消息
-      setMatch(prev => {
-        const readUp = (prev.chats[key] ?? []).map(m => (m.from === me.id ? { ...m, read: true } : m))
-        return { ...prev, chats: { ...prev.chats, [key]: [...readUp, msg] } }
-      })
     },
     posts,
     events,
@@ -1230,9 +1239,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return pool[hashStr(me.id + other.id) % pool.length]
     },
     candidates() {
-      if (!me) return []
+      if (!me || !isProfileReadyForMatching(me)) return []
       const passed = match.passes[me.id] ?? []
-      return users.filter(u => u.id !== me.id && !u.role && !u.banned && u.gender === me.seeking && !passed.includes(u.id) && !blocks.includes(u.id))
+      return users.filter(
+        u =>
+          u.id !== me.id &&
+          !u.role &&
+          !u.banned &&
+          !SEED_IDS.has(u.id) &&
+          isProfileReadyForMatching(u) &&
+          u.gender === me.seeking &&
+          u.seeking === me.gender &&
+          !passed.includes(u.id) &&
+          !blocks.includes(u.id),
+      )
     },
     dailyYuanfen() {
       if (!me) return []

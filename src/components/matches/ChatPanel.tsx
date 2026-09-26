@@ -1,25 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { ImagePlus, Send, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { hashStr, readImageFile, riskWord, useStore } from '@/lib/store'
+import { readImageFile, riskWord, useStore } from '@/lib/store'
 import type { User } from '@/lib/store'
 import { fmtTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { EmojiRow, Lightbox } from '@/components/ui'
-
-const REPLIES = [
-  '哈哈,好巧,我正想同你打招呼。',
-  '看到你也很喜欢这些,改日细聊?',
-  '缘分真是奇妙,幸会 ☺',
-  '你周末一般喜欢做什么?',
-  '你的封面照片真好看,是在哪儿拍的?',
-]
-
-const IMAGE_REPLIES = [
-  '这张照片真好看,你的眼光真好。',
-  '收到啦,忍不住多看了两眼 ☺',
-  '拍得真好,改天给我讲讲背后的故事?',
-]
 
 const QUICK_PHRASES = [
   '你周末一般怎么过?',
@@ -39,9 +25,8 @@ const dayLabel = (at: number) => {
 }
 
 export function ChatPanel({ user }: { user: User }) {
-  const { me, chatWith, sendChat, pushReply, icebreakerFor, markRead, recallMsg, pollChats } = useStore()
+  const { me, chatWith, sendChat, icebreakerFor, markRead, recallMsg, pollChats } = useStore()
   const [text, setText] = useState('')
-  const [typing, setTyping] = useState(false)
   const [pendingImgs, setPendingImgs] = useState<string[]>([])
   const [lb, setLb] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
@@ -55,7 +40,7 @@ export function ChatPanel({ user }: { user: User }) {
 
   useEffect(() => {
     boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' })
-  }, [msgs.length, typing])
+  }, [msgs.length])
 
   // 准实时收信(v1.9): 会话打开期间每 12 秒拉取服务端会话, 合并对方新消息
   useEffect(() => {
@@ -77,13 +62,6 @@ export function ChatPanel({ user }: { user: User }) {
     if (riskWord(t)) {
       toast.warning('温馨提醒:涉及钱财、验证码等内容请谨慎甄别,随缘网绝不会向你索要财物或密码。')
     }
-    const pool = hadImage ? IMAGE_REPLIES : REPLIES
-    const reply = pool[hashStr(t + user.id + (hadImage ? 'img' : '')) % pool.length]
-    setTyping(true)
-    setTimeout(() => {
-      pushReply(user.id, reply)
-      setTyping(false)
-    }, 1200)
   }
 
   const pickImage = async (file: File | undefined) => {
@@ -180,16 +158,6 @@ export function ChatPanel({ user }: { user: User }) {
             </div>
           )
         })}
-        {typing && (
-          <div className="flex items-end gap-2">
-            <img src={user.photos[0]} alt="" className="h-7 w-7 rounded-full object-cover" />
-            <p className="flex items-center gap-1 rounded-lg border border-border bg-card px-3 py-2.5" aria-label="对方正在输入">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:120ms]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:240ms]" />
-            </p>
-          </div>
-        )}
       </div>
       <div className="flex gap-1.5 overflow-x-auto border-t border-border px-3 pt-2">
         {QUICK_PHRASES.map(q => (
