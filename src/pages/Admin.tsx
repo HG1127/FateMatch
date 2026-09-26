@@ -5,12 +5,32 @@ import { DEFAULT_SETTINGS, FEATURE_META, readImageFile, useStore } from '@/lib/s
 import type { PostComment, Settings, Story } from '@/lib/store'
 import { countTables, exportBackup } from '@/lib/dataExport'
 import type { DataStat } from '@/lib/dataExport'
+import { fetchSecurityEvents, fetchWordFilter, saveWordFilter } from '@/lib/repo'
+import type { SecurityEvent } from '@/lib/repo'
 import { FESTS, FEST_TEMPLATE } from '@/lib/festivals'
 import type { FestTemplate } from '@/lib/festivals'
 import { Modal } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 const FEST_NAMES = [...new Set(Object.values(FESTS))]
+
+// 安全事件类型 -> 产品语标签(v1.12)
+const SEC_TYPE_LABELS: Record<string, string> = {
+  login_success: '登录成功',
+  auth_fail: '密码错误',
+  auth_lock: '触发登录锁定',
+  auth_locked_reject: '锁定期拒绝',
+  rate_limit: '触发限流',
+  word_blocked: '违规词拦截',
+  word_filter_updated: '调整敏感词表',
+  password_reset: '掌柜重置密码',
+  password_changed: '会员修改密码',
+  ban_set: '停用账号',
+  ban_unset: '恢复账号',
+  role_changed: '角色变更',
+  account_deleted: '注销账号',
+  content_deleted: '删除内容',
+}
 
 // 「最近七日注册」的时间基准: 模块加载时取一次, 避免在渲染期间调用 Date.now
 const NOW = Date.now()
@@ -112,6 +132,44 @@ export function AdminPage() {
   const [editPostId, setEditPostId] = useState('')
   const [editPostText, setEditPostText] = useState('')
   const [confirmPurge, setConfirmPurge] = useState(false)
+  // 安全页签: 服务端安全事件日志 + 敏感词表管理 (v1.12)
+  const [secEvents, setSecEvents] = useState<SecurityEvent[] | null>(null)
+  const [secBusy, setSecBusy] = useState(false)
+  const [wordDefaults, setWordDefaults] = useState<string[]>([])
+  const [wordCustom, setWordCustom] = useState('')
+  const [wordLoaded, setWordLoaded] = useState(false)
+  const secTried = useRef(false)
+  const loadSecEvents = async () => {
+    setSecBusy(true)
+    try {
+      setSecEvents(await fetchSecurityEvents(100))
+    } catch {
+      toast.error('安全日志读取失败,稍后再试')
+    }
+    setSecBusy(false)
+  }
+  useEffect(() => {
+    if (tab !== 'safety') return
+    // 首次进入安全页签时拉取(结果回来才落状态,避免在 effect 里同步 setState)
+    if (secEvents === null && !secTried.current) {
+      secTried.current = true
+      fetchSecurityEvents(100)
+        .then(setSecEvents)
+        .catch(() => {
+          toast.error('安全日志读取失败,稍后再试')
+          setSecEvents([])
+        })
+    }
+    if (!wordLoaded) {
+      fetchWordFilter()
+        .then(w => {
+          setWordDefaults(w.defaults)
+          setWordCustom(w.words.join('\n'))
+          setWordLoaded(true)
+        })
+        .catch(() => setWordLoaded(true))
+    }
+  }, [tab, secEvents, secBusy, wordLoaded])
   // 数据维护: 各表条数盘点 + JSON 备份导出
   const [dataStats, setDataStats] = useState<DataStat[] | null>(null)
   const [dataBusy, setDataBusy] = useState(false)
@@ -304,7 +362,7 @@ export function AdminPage() {
   const TABS = [
     { key: 'overview' as const, label: '数据总览', desc: '会员 · 报名 · 帖文 · 佳音', icon: BarChart3 },
     { key: 'content' as const, label: '内容运营', desc: '策展 · 活动 · 佳音墙', icon: Feather },
-    { key: 'safety' as const, label: '会员与安全', desc: '举报 · 停用账号', icon: ShieldAlert },
+    { key: 'safety' as const, label: '会员与安全', desc: '举报 · 停用 · 安全日志', icon: ShieldAlert },
     { key: 'site' as const, label: '站点设置', desc: '功能开关 · 公告', icon: Settings2 },
     { key: 'data' as const, label: '数据维护', desc: '备份导出 · 表格盘点', icon: Database },
   ]
@@ -1235,6 +1293,76 @@ export function AdminPage() {
               ))}
             {!users.some(u => !u.role && (!qMember.trim() || u.nickname.includes(qMember.trim()) || u.phone.includes(qMember.trim()))) && (
               <p className="rounded-md bg-secondary/40 p-6 text-center text-sm text-muted-foreground">没有匹配的会员。</p>
+            )}
+          </div>
+        </section>
+
+        <section className="card-cn rounded-lg p-5 md:p-6">
+          <h2 className="mb-1 flex items-center gap-2 font-xing text-2xl text-foreground">
+            <ShieldAlert size={18} className="text-gold" />
+            敏感词过滤
+          </h2>
+          <p className="mb-3 text-xs text-muted-foreground">
+            公开发布的内容(动态、评论、活动、昵称、简介)命中违规词会被当场拦下;私信与名片不拦,正常交换联系方式不受影响。内置底线词不可删,可在下方按行追加自定义词(最多 200 个),保存即时生效。
+          </p>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {wordDefaults.map(w => (
+              <span key={w} className="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{w}</span>
+            ))}
+            {!wordDefaults.length && <span className="text-[11px] text-muted-foreground">内置词表加载中…</span>}
+          </div>
+          <textarea
+            className="input-cn min-h-24 w-full text-xs"
+            placeholder={'每行一个自定义违规词,例如:\n刷单兼职\n代办证件'}
+            value={wordCustom}
+            onChange={e => setWordCustom(e.target.value)}
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              className="btn-primary !px-4 !py-1.5 text-xs transition active:scale-95"
+              onClick={async () => {
+                const words = wordCustom.split('\n').map(s => s.trim()).filter(Boolean)
+                try {
+                  const saved = await saveWordFilter(words)
+                  setWordCustom(saved.join('\n'))
+                  toast.success(`敏感词表已更新,当前自定义 ${saved.length} 个`)
+                } catch {
+                  toast.error('保存失败,稍后再试')
+                }
+              }}
+            >
+              保存词表
+            </button>
+            <span className="text-[11px] text-muted-foreground">自定义 {wordCustom.split('\n').filter(s => s.trim()).length} 个</span>
+          </div>
+        </section>
+
+        <section className="card-cn rounded-lg p-5 md:p-6">
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="font-xing text-2xl text-foreground">安全日志</h2>
+            <button className="btn-outline !px-2.5 !py-1 text-[11px]" disabled={secBusy} onClick={() => void loadSecEvents()}>
+              <RotateCcw size={12} className={secBusy ? 'animate-spin' : ''} />
+              刷新
+            </button>
+          </div>
+          <p className="mb-3 text-xs text-muted-foreground">
+            服务端自动留痕:登录成败与锁定、限流命中、违规词拦截、停用恢复、密码重置、注销与删帖级联。身份已脱敏,保留 90 天,最近 100 条如下。
+          </p>
+          <div className="space-y-1.5">
+            {secEvents === null && <p className="rounded-md bg-secondary/40 p-6 text-center text-sm text-muted-foreground">正在读取…</p>}
+            {secEvents?.slice(0, 100).map(ev => (
+              <p key={ev.id} className="flex flex-wrap items-baseline gap-x-2 rounded-md bg-secondary/40 px-3 py-1.5 text-xs text-foreground/80">
+                <span className={cn('shrink-0 rounded-sm px-1.5 py-0.5 text-[10px]', ev.type === 'login_success' || ev.type === 'password_changed' ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary')}>
+                  {SEC_TYPE_LABELS[ev.type] ?? ev.type}
+                </span>
+                <span className="cjk-latin shrink-0 text-muted-foreground">{new Date(ev.at).toLocaleString()}</span>
+                {ev.identity && <span className="cjk-latin">{ev.identity}</span>}
+                {ev.ip && <span className="cjk-latin text-muted-foreground">IP {ev.ip}</span>}
+                {ev.detail && <span className="cjk-latin break-all text-muted-foreground">{JSON.stringify(ev.detail)}</span>}
+              </p>
+            ))}
+            {secEvents !== null && !secEvents.length && (
+              <p className="rounded-md bg-secondary/40 p-6 text-center text-sm text-muted-foreground">暂无安全事件,一切平静。</p>
             )}
           </div>
         </section>

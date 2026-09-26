@@ -374,3 +374,19 @@ CREATE TABLE IF NOT EXISTS event_attendees (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_event_attendees_sid ON event_attendees ("sid");
 CREATE INDEX IF NOT EXISTS idx_event_attendees_event ON event_attendees ("event_sid");
 CREATE INDEX IF NOT EXISTS idx_event_attendees_owner ON event_attendees ("owner_sid");
+
+-- v1.12 安全事件持久化：登录成败 / 锁定 / 限流命中 / 敏感词拦截 / 停用恢复 / 密码重置 / 删除级联等留痕。
+-- 仅掌柜经管理端点（/api/admin/security-events）可查，不经通用集合接口暴露（无权限规则即 404）；
+-- 网关每 6 小时自动清理 90 天前的旧事件。identity 落库前已脱敏。
+CREATE TABLE IF NOT EXISTS security_events (
+  id text PRIMARY KEY,
+  "type" text,
+  "actor_sid" text,
+  "identity" text,
+  "ip" text,
+  "detail" jsonb,
+  "at" double precision,
+  created timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_security_events_at ON security_events ("at" DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_type ON security_events ("type");

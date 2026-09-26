@@ -18,6 +18,16 @@ project/.rh_attachments
 # 会员上传的图片附件(v1.8 起落盘存储), 含个人照片, 不入 git
 uploads
 
+# PocketBase / VibeX 运行时数据，可能含账号、会话或个人数据，不入 git
+pocketbase/pb_data/
+vibex-local/bin/**/pb_data/
+
+# 本地环境变量与凭据
+.env
+.env.*
+!.env.example
+!.env.*.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

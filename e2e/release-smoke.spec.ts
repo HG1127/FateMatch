@@ -727,6 +727,92 @@ test.describe('账号生命周期与附件', () => {
   })
 })
 
+test.describe('内容安全与审计留痕', () => {
+  const ADMIN_EMAIL = 'admin@smoke.test'
+  const ADMIN_PASS = 'Admin#2026x'
+
+  test('敏感词拦截公开内容、私信不受限；掌柜词表即时生效；安全事件仅掌柜可查', async ({ request }) => {
+    test.setTimeout(240_000)
+    const stamp = Date.now()
+    const mail = `word-${stamp}@smoke.test`
+    const reg = await request.post('/api/collections/users/records', {
+      data: { email: mail, password: PASS, passwordConfirm: PASS, name: '安全词员' },
+    })
+    expect(reg.status()).toBe(200)
+    const login = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: mail, password: PASS } })).json()
+    const H = { Authorization: login.token }
+    const myId = login.record.id
+    const adminLogin = await (await request.post('/api/collections/users/auth-with-password', { data: { identity: ADMIN_EMAIL, password: ADMIN_PASS } })).json()
+    const AH = { Authorization: adminLogin.token }
+
+    // 内置底线词拦截公开发帖（字段级 400，提示含违规词）
+    const blocked = await request.post('/api/collections/posts/records', {
+      headers: H,
+      data: { sid: `e2e-word-${stamp}`, author_sid: myId, text: '低价出售枪支弹药', images: [], topic: '', featured: false, at: stamp },
+    })
+    expect(blocked.status()).toBe(400)
+    const bBody = await blocked.json()
+    expect(bBody.data.text.message).toContain('违规词')
+
+    // 同字段正常内容不受影响
+    const okPost = await request.post('/api/collections/posts/records', {
+      headers: H,
+      data: { sid: `e2e-word-${stamp}`, author_sid: myId, text: '周末一起去爬山吧', images: [], topic: '', featured: false, at: stamp },
+    })
+    expect(okPost.status()).toBe(200)
+
+    // 私密场景不拦：私信里出现底线词照常发送（正常交换信息不受影响）
+    const dm = await request.post('/api/collections/chat_messages/records', {
+      headers: H,
+      data: { sid: `e2e-wdm-${stamp}`, sid_a: myId, sid_b: adminLogin.record.id, from_sid: myId, text: '最近高利贷电话骚扰我，拉黑了', at: stamp },
+    })
+    expect(dm.status()).toBe(200)
+
+    // 掌柜豁免：处置违规内容时同词可写（改帖不 400）
+    const adminEdit = await request.patch(`/api/collections/posts/records/${(await okPost.json()).id}`, {
+      headers: AH,
+      data: { text: '违规样本存档：枪支弹药（掌柜处置留档）' },
+    })
+    expect(adminEdit.status()).toBe(200)
+
+    // 掌柜词表端点：读取含内置词；追加自定义词后会员发帖即时被拦
+    const wfGet = await request.get('/api/admin/word-filter', { headers: AH })
+    expect(wfGet.status()).toBe(200)
+    const wfBody = await wfGet.json()
+    expect(Array.isArray(wfBody.defaults)).toBe(true)
+    expect(wfBody.defaults.length).toBeGreaterThan(0)
+    const custom = `刷单${stamp}`
+    const wfPut = await request.put('/api/admin/word-filter', { headers: AH, data: { words: [custom] } })
+    expect(wfPut.status()).toBe(200)
+    const blocked2 = await request.post('/api/collections/posts/records', {
+      headers: H,
+      data: { sid: `e2e-word2-${stamp}`, author_sid: myId, text: `诚招${custom}日结`, images: [], topic: '', featured: false, at: stamp },
+    })
+    expect(blocked2.status()).toBe(400)
+    expect((await blocked2.json()).data.text.message).toContain(custom)
+    // 词表清空还原，避免影响其他用例
+    expect((await request.put('/api/admin/word-filter', { headers: AH, data: { words: [] } })).status()).toBe(200)
+
+    // 非掌柜访问词表与安全事件一律 403；匿名 403
+    expect((await request.get('/api/admin/word-filter', { headers: H })).status()).toBe(403)
+    expect((await request.get('/api/admin/security-events', { headers: H })).status()).toBe(403)
+    expect((await request.get('/api/admin/security-events')).status()).toBe(403)
+
+    // 掌柜可读安全事件：此前的违规词拦截与错误密码已留痕，身份已脱敏（不含完整邮箱）
+    const evRes = await request.get('/api/admin/security-events?limit=100', { headers: AH })
+    expect(evRes.status()).toBe(200)
+    const evItems = (await evRes.json()).items as Array<{ type: string; identity: string | null; detail: Record<string, unknown> | null }>
+    expect(evItems.some((e) => e.type === 'word_blocked')).toBe(true)
+    expect(evItems.some((e) => e.type === 'login_success')).toBe(true)
+    expect(evItems.every((e) => !(e.identity ?? '').includes(mail))).toBe(true)
+    // 审计表不经通用集合接口暴露（掌柜也 404）
+    expect((await request.get('/api/collections/security_events/records', { headers: AH })).status()).toBe(404)
+
+    // 清理
+    expect((await request.delete(`/api/collections/users/records/${myId}`, { headers: H })).status()).toBe(204)
+  })
+})
+
 test.describe('页面服务启动检查（只读）', () => {
   test('首页可渲染且无崩溃', async ({ page }) => {
     await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' })

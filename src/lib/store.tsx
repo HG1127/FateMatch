@@ -516,6 +516,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // 数据初始为本地种子/默认值; 登录后从数据库水合覆盖, 改动再写回数据库
   const [account, setAccount] = useState<LocalAccount | null>(() => getLocalAccount())
   const [booted, setBooted] = useState(false)
+  const [hydratedAccountId, setHydratedAccountId] = useState<string | null>(null)
   const [users, setUsers] = useState<User[]>(() => seedUsers())
   const [match, setMatch] = useState<MatchState>({ likes: {}, passes: {}, chats: {}, reads: {} })
   const [posts, setPosts] = useState<Post[]>(() => seedPosts())
@@ -543,6 +544,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     () =>
       onLocalAccountChange(a => {
         setAccount(a)
+        setHydratedAccountId(id => id === a?.id ? id : null)
         if (!a) {
           setMatch({ likes: {}, passes: {}, chats: {}, reads: {} })
           setFavs({ users: [], posts: [], events: [] })
@@ -564,6 +566,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const boot = async () => {
       try {
         let world = await loadWorld(account?.id ?? null)
+        if (!alive) return
         if (world.empty && account) {
           await syncWorld(
             {
@@ -610,18 +613,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setContacts(world.contacts)
           setTour(world.tour)
         }
+        setHydratedAccountId(account?.id ?? null)
       } catch (e) {
+        if (!alive) return
         const msg = e instanceof Error ? e.message : String(e)
+        const status = (e as { status?: number } | null)?.status
         if (msg.includes('账号已停用')) {
           // 服务端封禁强制(v1.6):被停用账号的会话直接登出并告知原因
           logoutLocalAccount()
           toast.error('该账号已被停用,如有疑问请联系掌柜')
-        } else if (msg.includes('请重新登录')) {
+        } else if (status === 401 || msg.includes('请重新登录')) {
           // 改密/重置后旧令牌即时失效(v1.8):登出并引导重新登录
           logoutLocalAccount()
           toast.error('登录状态已失效,请重新登录')
-        } else if (alive) {
-          toast.error('数据库连接失败,当前展示临时数据,稍后可刷新重试')
+        } else if (status === 403) {
+          toast.error('部分数据无访问权限,已暂停自动保存,请联系管理员')
+        } else {
+          toast.error('数据加载失败,已暂停自动保存,稍后可刷新重试')
         }
       }
       if (alive) setBooted(true)
@@ -635,7 +643,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // 全量状态差量写回各表(0.8 秒防抖; 私有表只写自己的行)
   useEffect(() => {
-    if (!booted || !account) return
+    if (!booted || !account || hydratedAccountId !== account.id) return
     const t = setTimeout(() => {
       void syncWorld(
         { users, posts, events, settings, digests, reports, adminLogs, match, favs, favmeta, visits, blocks, reminders, checkins, contacts, tour },
@@ -644,7 +652,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ).catch(() => toast.error('保存未成功,数据库写入异常'))
     }, 800)
     return () => clearTimeout(t)
-  }, [users, posts, events, settings, digests, reports, adminLogs, match, favs, favmeta, visits, blocks, reminders, checkins, contacts, tour, booted, account])
+  }, [users, posts, events, settings, digests, reports, adminLogs, match, favs, favmeta, visits, blocks, reminders, checkins, contacts, tour, booted, account, hydratedAccountId])
 
   const me = users.find(u => u.id === account?.id) ?? null
 

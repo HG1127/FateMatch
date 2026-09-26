@@ -13,11 +13,18 @@ interface Row {
 type RowMap = Map<string, Row & { _key?: string }>
 const cache: Record<string, RowMap> = {}
 
-async function loadCol(col: string): Promise<Row[]> {
+async function loadCol(col: string, enabled = true): Promise<Row[]> {
+  if (!enabled) {
+    cache[col] = new Map()
+    return []
+  }
   const items: Row[] = []
   let page = 1
   for (;;) {
     const res = await pb.collection(col).getList(page, 200)
+    if (!Array.isArray(res.items) || !Number.isSafeInteger(res.totalPages) || res.totalPages < 0 || res.page !== page) {
+      throw new Error('数据库接口返回异常，请检查后端服务和 /__pb 代理配置')
+    }
     items.push(...(res.items as unknown as Row[]))
     if (page >= res.totalPages) break
     page++
@@ -119,32 +126,34 @@ interface ChatRow {
 const j = (v: unknown, fb: unknown) => (v == null ? fb : v)
 
 export async function loadWorld(meId: string | null): Promise<World> {
-  const [profiles, postsR, pcR, eventsR, ecR, cmR, ulR, upR, urR, favR, fgR, visR, blR, reR, ciR, coR, rpR, dgR, alR, ssR, tourR, clR, eaR] =
+  const signedIn = !!meId
+  const [profiles, postsR, pcR, eventsR, ecR, cmR, ulR, upR, urR, favR, fgR, visR, blR, reR, ciR, coR, rpR, dgR, ssR, tourR, clR, eaR] =
     await Promise.all([
       loadCol('profiles'),
       loadCol('posts'),
       loadCol('post_comments'),
       loadCol('events'),
       loadCol('event_comments'),
-      loadCol('chat_messages'),
-      loadCol('user_likes'),
-      loadCol('user_passes'),
-      loadCol('user_reads'),
-      loadCol('favorites'),
-      loadCol('fav_groups'),
-      loadCol('visits'),
-      loadCol('blocks'),
-      loadCol('reminders'),
-      loadCol('checkins'),
-      loadCol('contacts'),
-      loadCol('reports'),
+      loadCol('chat_messages', signedIn),
+      loadCol('user_likes', signedIn),
+      loadCol('user_passes', signedIn),
+      loadCol('user_reads', signedIn),
+      loadCol('favorites', signedIn),
+      loadCol('fav_groups', signedIn),
+      loadCol('visits', signedIn),
+      loadCol('blocks', signedIn),
+      loadCol('reminders', signedIn),
+      loadCol('checkins', signedIn),
+      loadCol('contacts', signedIn),
+      loadCol('reports', signedIn),
       loadCol('digests'),
-      loadCol('admin_logs'),
       loadCol('site_settings'),
-      loadCol('user_tour'),
+      loadCol('user_tour', signedIn),
       loadCol('content_likes'),
       loadCol('event_attendees'),
     ])
+  const isAdmin = signedIn && profiles.some(row => row.sid === meId && row.role === 'admin')
+  const alR = await loadCol('admin_logs', isAdmin)
 
   // 计数拆分表装配: kind:target -> 点赞人名单; event -> 报名名单(按创建序)
   const likesBy = new Map<string, string[]>()
@@ -565,4 +574,33 @@ export async function adminResetPassword(userId: string): Promise<string> {
   }
   if (!out?.tempPassword) throw new Error('reset failed')
   return out.tempPassword
+}
+
+/** 服务端安全事件(v1.12):登录成败/锁定/限流/敏感词拦截/停用恢复/密码重置/删除级联等,仅掌柜可查 */
+export interface SecurityEvent {
+  id: string
+  type: string
+  actor_sid: string | null
+  identity: string | null
+  ip: string | null
+  detail: Record<string, unknown> | null
+  at: number
+}
+
+/** 掌柜专用:拉取最近安全事件(倒序) */
+export async function fetchSecurityEvents(limit = 100): Promise<SecurityEvent[]> {
+  const out = (await pb.send(`/api/admin/security-events?limit=${limit}`, { method: 'GET' })) as { items?: SecurityEvent[] }
+  return out?.items ?? []
+}
+
+/** 掌柜专用:读敏感词表(defaults=内置底线词只读,words=自定义追加词可改) */
+export async function fetchWordFilter(): Promise<{ defaults: string[]; words: string[] }> {
+  const out = (await pb.send('/api/admin/word-filter', { method: 'GET' })) as { defaults?: string[]; words?: string[] }
+  return { defaults: out?.defaults ?? [], words: out?.words ?? [] }
+}
+
+/** 掌柜专用:保存自定义敏感词(全量覆盖,保存即时生效) */
+export async function saveWordFilter(words: string[]): Promise<string[]> {
+  const out = (await pb.send('/api/admin/word-filter', { method: 'PUT', body: { words } })) as { words?: string[] }
+  return out?.words ?? []
 }

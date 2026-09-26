@@ -135,6 +135,47 @@ const ARRAY_LIMITS = {
   digests: { post_sids: 50, covers: 9 },
 }
 
+// ---------- v1.12 敏感词过滤（只拦公开内容写路径；私信 / 名片 / 举报等私密场景不拦，正常交换联系方式不受影响） ----------
+
+// 内置底线词表（黄赌毒枪与明显广告骚扰）；掌柜可经管理端点追加自定义词（存 gateway_meta，不经公开读接口外露）
+const DEFAULT_BLOCKED_WORDS = [
+  '博彩', '赌场', '老虎机', '六合彩', '私彩', '裸聊', '色情', '援交', '代孕',
+  '枪支', '弹药', '迷药', '听话水', '代开发票', '高利贷', '办证刻章', '上门推销',
+]
+const WORD_FILTER_FIELDS = {
+  posts: ['text', 'topic'],
+  post_comments: ['text'],
+  event_comments: ['text'],
+  events: ['title', 'desc', 'requirements'],
+  profiles: ['nickname', 'bio'],
+}
+let extraBlockedWords = [] // 掌柜自定义追加词（内存缓存，启动加载 + 管理端点保存时刷新）
+
+async function loadBlockedWords() {
+  try {
+    const r = await q(`select value from ${tq('gateway_meta')} where key = 'blocked_words'`)
+    const arr = r.rows[0] ? JSON.parse(r.rows[0].value) : []
+    extraBlockedWords = Array.isArray(arr) ? arr.filter((x) => typeof x === 'string' && x) : []
+  } catch {
+    extraBlockedWords = []
+  }
+}
+
+/** 命中违规词抛字段级 400（掌柜豁免：处置违规内容时不能被自己拦下） */
+function checkBlockedWords(table, col, v, auth, fieldKey) {
+  if (auth?.role === 'admin') return
+  if (!WORD_FILTER_FIELDS[table]?.includes(col) || typeof v !== 'string') return
+  const hay = v.toLowerCase()
+  for (const w of [...DEFAULT_BLOCKED_WORDS, ...extraBlockedWords]) {
+    if (w && hay.includes(w.toLowerCase())) {
+      METRICS.wordBlocked += 1
+      console.warn(`word-blocked: ${table}.${col} word=${w} by=${auth?.id ?? 'anon'}`)
+      secEvent('word_blocked', { actorSid: auth?.id ?? '', detail: { table, word: w }, dk: `word_blocked:${auth?.id ?? 'anon'}:${w}` })
+      throw new HttpErr(400, 'Validation failed.', { [fieldKey]: { message: `内容包含违规词「${w}」，请修改后再提交` } })
+    }
+  }
+}
+
 // ---------- 权限规则（与原数据服务逐条一致） ----------
 
 const A = 'auth' // 任意登录用户
@@ -291,11 +332,12 @@ function rateHit(key, limit, windowMs) {
   return b.n <= limit
 }
 
-/** 超限即记日志并抛 429（安全审计：限流命中留痕） */
+/** 超限即记日志并抛 429（安全审计：限流命中留痕，文件日志 + 落库双写） */
 function rateGate(key, limit, windowMs, msg) {
   if (!rateHit(key, limit, windowMs)) {
     METRICS.rateLimitHits += 1
     console.warn(`rate-limit: ${key}`)
+    secEvent('rate_limit', { ip: key.slice(2), detail: { key } })
     throw new HttpErr(429, msg)
   }
 }
@@ -330,7 +372,42 @@ const METRICS = {
   uploads: { count: 0, bytes: 0 },
   accountCascades: 0,
   passwordResets: 0,
+  wordBlocked: 0,
 }
+
+// ---------- v1.12 安全事件持久化（security_events 表，仅掌柜经管理端点可查；写失败不影响业务请求） ----------
+
+const SEC_DEDUP = new Map() // type:主体 -> 最近落库时间（同类事件 60 秒内只记一次，防攻击刷屏）
+const SEC_RETENTION_MS = 90 * 86400_000 // 留痕保留 90 天，超期自动清理
+
+/** 邮箱等身份标识脱敏后再落库（ad***@x.com），日志可读但不泄露完整身份 */
+function maskIdentity(s) {
+  const v = String(s ?? '')
+  if (!v) return ''
+  const at = v.indexOf('@')
+  if (at > 0) return `${v.slice(0, Math.min(2, at))}***${v.slice(at)}`
+  return `${v.slice(0, 2)}***`
+}
+
+/** 落一条安全事件（fire-and-forget：表未建 / 网络抖动时静默跳过，绝不拖垮业务路径）；dk 可覆写去重键 */
+function secEvent(type, { actorSid = '', identity = '', ip = '', detail = null, dk = '' } = {}) {
+  const dedupKey = dk || `${type}:${identity || actorSid || ip}`
+  const now = Date.now()
+  if (now - (SEC_DEDUP.get(dedupKey) ?? 0) < 60_000) return
+  SEC_DEDUP.set(dedupKey, now)
+  q(
+    `insert into ${tq('security_events')} (id, "type", actor_sid, identity, ip, detail, "at", created)
+     values ($1,$2,$3,$4,$5,$6,$7,now())`,
+    [genId(), type, actorSid, maskIdentity(identity), ip, detail ? JSON.stringify(detail) : null, now],
+  ).catch(() => {})
+}
+
+// 过期窗口与去重记录一并清扫；留痕超期行每 6 小时清一次
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, t] of SEC_DEDUP) if (now - t > 60_000) SEC_DEDUP.delete(k)
+  q(`delete from ${tq('security_events')} where "at" < $1`, [now - SEC_RETENTION_MS]).catch(() => {})
+}, 6 * 3600_000).unref()
 
 function assertNotLocked(identity, ip) {
   const rec = AUTH_FAILS.get(identity)
@@ -338,6 +415,7 @@ function assertNotLocked(identity, ip) {
     METRICS.authLockedRejects += 1
     const mins = Math.ceil((rec.lockUntil - Date.now()) / 60000)
     console.warn(`auth-locked-reject: ${identity} ip=${ip}`)
+    secEvent('auth_locked_reject', { identity, ip })
     throw new HttpErr(429, `密码错误次数过多，请 ${mins} 分钟后再试`)
   }
 }
@@ -351,8 +429,10 @@ function noteAuthFail(identity, ip) {
     rec.n = 0
     METRICS.authLocks += 1
     console.warn(`auth-lock: ${identity} ip=${ip} 锁定 ${AUTH_LOCK_MS / 60000} 分钟`)
+    secEvent('auth_lock', { identity, ip, detail: { minutes: AUTH_LOCK_MS / 60000 } })
   } else {
     console.warn(`auth-fail: ${identity} ip=${ip} n=${rec.n}`)
+    secEvent('auth_fail', { identity, ip, detail: { n: rec.n } })
   }
   AUTH_FAILS.set(identity, rec)
   if (AUTH_FAILS.size > 1000) {
@@ -414,6 +494,8 @@ function bodyToCols(table, body, auth) {
     if (al != null && Array.isArray(v) && v.length > al) {
       throw new HttpErr(400, 'Validation failed.', { [k]: { message: `数量超限（上限 ${al} 个）` } })
     }
+    // 敏感词拦截（公开内容字段；掌柜豁免）
+    checkBlockedWords(table, col, v, auth, k)
     out.set(col, v)
   }
   return out
@@ -672,6 +754,7 @@ async function handleUpdate(table, id, body, auth) {
       bcrypt.hashSync(parsed.password, 10),
       id,
     ])
+    secEvent('password_changed', { actorSid: id, identity: existing.email })
   }
 
   if (table === 'users' && body?.email != null) {
@@ -687,6 +770,15 @@ async function handleUpdate(table, id, body, auth) {
 
   const data = bodyToCols(table, body, auth)
   if (data.size) {
+    // 掌柜处置动作落安全事件（停用 / 恢复 / 角色变更），仅在实际发生变化时记录
+    if (table === 'profiles' && auth?.role === 'admin') {
+      if (data.has('banned') && Boolean(data.get('banned')) !== Boolean(existing.banned)) {
+        secEvent(data.get('banned') ? 'ban_set' : 'ban_unset', { actorSid: auth.id, detail: { target: existing.sid } })
+      }
+      if (data.has('role') && String(data.get('role') ?? '') !== String(existing.role ?? '')) {
+        secEvent('role_changed', { actorSid: auth.id, detail: { target: existing.sid, from: existing.role ?? '', to: String(data.get('role') ?? '') } })
+      }
+    }
     const sets = []
     const values = []
     for (const [c, v] of data) {
@@ -708,10 +800,12 @@ async function handleDelete(table, id, auth) {
   }
   if (table === 'users') {
     await cascadeUserDelete(id)
+    secEvent('account_deleted', { actorSid: auth?.id ?? id, identity: r.rows[0].email, detail: { target: id, self: auth?.id === id } })
     return null // 204
   }
   if (table === 'posts' || table === 'events') {
     await cascadeContentDelete(table, r.rows[0])
+    secEvent('content_deleted', { actorSid: auth?.id ?? '', detail: { table, sid: String(r.rows[0].sid ?? r.rows[0].id) } })
     return null // 204
   }
   await q(`delete from ${tq(table)} where id = $1`, [id])
@@ -803,6 +897,49 @@ async function cascadeUserDelete(id) {
   }
 }
 
+// ---------- v1.12 掌柜管理端点：安全事件查询 / 敏感词表维护 ----------
+
+function needAdmin(auth) {
+  needAuth(auth)
+  if (auth.role !== 'admin') throw new HttpErr(403, 'You are not allowed to perform this operation.')
+  return auth
+}
+
+/** 最近安全事件（倒序，可按类型过滤；limit ≤200） */
+async function handleAdminSecurityEvents(url, auth) {
+  needAdmin(auth)
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? 100) || 100))
+  const type = String(url.searchParams.get('type') ?? '')
+  const params = [limit]
+  let wsql = ''
+  if (type && /^[a-z_]{1,40}$/.test(type)) {
+    wsql = 'where "type" = $2'
+    params.push(type)
+  }
+  const r = await q(
+    `select id, "type", actor_sid, identity, ip, detail, "at" from ${tq('security_events')} ${wsql} order by "at" desc limit $1`,
+    params,
+  )
+  return { items: r.rows }
+}
+
+/** 敏感词表读取 / 保存（自定义词存 gateway_meta；保存即时生效并落安全事件） */
+async function handleAdminWordFilter(req, body, auth) {
+  needAdmin(auth)
+  if (req.method === 'GET') return { defaults: DEFAULT_BLOCKED_WORDS, words: extraBlockedWords }
+  const raw = body?.words
+  if (!Array.isArray(raw)) throw new HttpErr(400, 'Validation failed.', { words: { message: '词表须为数组' } })
+  const words = [...new Set(raw.map((x) => String(x ?? '').trim().slice(0, 30)).filter(Boolean))].slice(0, 200)
+  await q(
+    `insert into ${tq('gateway_meta')} (key, value) values ('blocked_words', $1)
+     on conflict (key) do update set value = $1`,
+    [JSON.stringify(words)],
+  )
+  extraBlockedWords = words
+  secEvent('word_filter_updated', { actorSid: auth.id, detail: { count: words.length } })
+  return { defaults: DEFAULT_BLOCKED_WORDS, words }
+}
+
 async function handleAuthWithPassword(body, ip) {
   const parsed = vparse(AuthBody, body)
   const identity = parsed.identity.toLowerCase()
@@ -817,6 +954,7 @@ async function handleAuthWithPassword(body, ip) {
   const prof = await q(`select banned from ${tq('profiles')} where sid = $1 limit 1`, [user.id])
   if (prof.rows[0]?.banned) throw new HttpErr(403, '账号已停用，如有疑问请联系掌柜')
   AUTH_FAILS.delete(identity)
+  secEvent('login_success', { actorSid: user.id, identity, ip })
   const token = signToken({
     id: user.id,
     type: 'auth',
@@ -874,6 +1012,7 @@ async function handleAdminResetPassword(idOrEmail, auth) {
   await q(`update ${tq('users')} set password_hash = $1, updated = now() where id = $2`, [bcrypt.hashSync(temp, 10), user.id])
   METRICS.passwordResets += 1
   console.log(`admin-reset-password: target=${user.id} by=${auth.id}`)
+  secEvent('password_reset', { actorSid: auth.id, identity: user.email, detail: { target: user.id } })
   return { tempPassword: temp }
 }
 
@@ -926,7 +1065,7 @@ function send(res, status, body) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Pb-Auth',
     ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
   })
@@ -1006,6 +1145,17 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, out)
     }
 
+    // 安全事件查询（仅掌柜；v1.12）
+    if ((path === '/api/admin/security-events' || path === '/api/admin/security-events/') && req.method === 'GET') {
+      return send(res, 200, await handleAdminSecurityEvents(url, auth))
+    }
+
+    // 敏感词表维护（仅掌柜；v1.12）
+    if ((path === '/api/admin/word-filter' || path === '/api/admin/word-filter/') && (req.method === 'GET' || req.method === 'PUT')) {
+      const body = req.method === 'PUT' ? await readBody(req) : null
+      return send(res, 200, await handleAdminWordFilter(req, body, auth))
+    }
+
     // 图片上传（登录成员）与读取（文件名不可猜测，凭 URL 访问）
     if ((path === '/api/uploads' || path === '/api/uploads/') && req.method === 'POST') {
       return send(res, 200, await handleUpload(await readBody(req), auth))
@@ -1038,7 +1188,8 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       const table = decodeURIComponent(m[1])
       const id = m[2] ? decodeURIComponent(m[2]) : null
-      if (!COLUMNS.has(table) || table === 'gateway_meta') {
+      // 未挂权限规则的表（gateway_meta 密钥表、security_events 内部审计表）不经通用集合接口暴露
+      if (!COLUMNS.has(table) || !RULES[table]) {
         throw new HttpErr(404, 'The requested resource wasn\'t found.')
       }
       if (!id && req.method === 'GET') return send(res, 200, await handleList(table, url, req, auth))
@@ -1081,6 +1232,7 @@ const server = http.createServer(async (req, res) => {
 async function main() {
   await loadColumns()
   await loadSecret()
+  await loadBlockedWords()
   const tables = [...COLUMNS.keys()].filter((t) => RULES[t])
   console.log(`Neon 网关就绪：${tables.length} 张业务表，schema ${SCHEMA}，端口 ${PORT}`)
   server.listen(PORT, '0.0.0.0')
