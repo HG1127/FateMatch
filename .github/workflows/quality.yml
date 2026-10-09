@@ -37,7 +37,7 @@ jobs:
           VERCEL_ENV: preview
         run: |
           node scripts/vercel-build.mjs
-          pnpm vercel:check
+          pnpm vercel:check          test -f vercel.ts && test ! -f vercel.mjs
       - name: Gateway syntax
         run: node --check server/neon-gateway.mjs
       - name: Discover Playwright tests without connecting to Neon

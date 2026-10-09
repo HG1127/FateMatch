@@ -16,7 +16,7 @@
 
 ## 二、Vercel 前端配置（本仓已落地）
 
-- `vercel.mjs`：Vercel 2026 支持的动态构建配置，通过 `SUIYUAN_BACKEND_ORIGIN` 注入真实后端 HTTPS 地址（**不把地址硬编码到 Git**）。
+- `vercel.ts`：Vercel 官方支持的动态构建配置，通过 `SUIYUAN_BACKEND_ORIGIN` 注入真实后端 HTTPS 地址（**不把地址硬编码到 Git**）。
 - `scripts/vercel-split-config.mjs`：校验后端必须是 HTTPS 的公网域名且无凭据、路径或参数；按 `/__pb` → `/api` → React SPA 路由的先后顺序改写。
 - `SUIYUAN_DEPLOY_MODE=staging` 是必填的部署意图闸门。若是 Vercel Production target，默认拒绝；必须在安全验收后明确设置 `SUIYUAN_ALLOW_PRODUCTION_TARGET=yes` 才可对独立 staging 项目使用 Production alias。**不要为了省步骤对正式服务设置此值**。
 - `node scripts/vercel-build.mjs`：静态资源输出以根路径 `/assets/...` 引用，使 `/me`、`/matches` 等 SPA 深链接刷新后仍可加载 JS/CSS；原 VibeX 导出继续使用相对路径 `./assets/...`，不改动其 App ID / 平台路径。
@@ -27,7 +27,7 @@
 
 1. 首先创建全新 **Neon Staging 数据库项目及专用数据库用户**，不要重用生产连接串，只向 Node 后端 Secret Manager 提供。`NEON_SCHEMA=staging_render_preview`（或另一个合规 staging_*），严禁 `public`。
 2. **后端先部署并确认** `https://<真实 staging Node 后端>/api/ready`。已经准备好的可选模板为 `render.yaml`（Render Free，区域 Singapore，默认 **manual deploy**；需要用户在 Render Dashboard 连接并填写独立 staging `NEON_DSN`）。后端上线前执行受控 SQL schema 检查/幂等迁移，仅操作 staging 库；容器启动不会自动代表备份与迁移审批已完成。
-3. Vercel 使用 GitHub 仓库 `HG1127/FateMatch`，根目录 `./`，Framework = Vite，Build Command 从 `vercel.mjs` 自动使用 `node scripts/vercel-build.mjs`，Output Directory = `dist`。**不要另建静态前端工程，也不要把 Vite 直接指向 Neon**。
+3. Vercel 使用 GitHub 仓库 `HG1127/FateMatch`，根目录 `./`，Framework = Vite，Build Command 从 `vercel.ts` 自动使用 `node scripts/vercel-build.mjs`，Output Directory = `dist`。**不要另建静态前端工程，也不要把 Vite 直接指向 Neon**。
 4. Vercel 的 **Preview** 环境变量设置：
    - `SUIYUAN_DEPLOY_MODE=staging`
    - `SUIYUAN_BACKEND_ORIGIN=https://<你的真实 Node Staging 服务域名>`

@@ -61,7 +61,7 @@ pnpm staging:smoke                        # 本地 127.0.0.1:8081 只读健康/�
 
 ## Vercel 前端 + 独立 Node 后端（方案 A）
 
-已增加 `vercel.mjs`、`render.yaml` 和专门测试：Vercel 承载 React 静态前端，`/__pb/*`、`/api/*` 反向代理到独立 HTTPS Node Gateway；Node 只读取隔离 Neon staging 数据库。Vercel 前端**不配置数据库密码**。
+已增加 `vercel.ts`、`render.yaml` 和专门测试：Vercel 承载 React 静态前端，`/__pb/*`、`/api/*` 反向代理到独立 HTTPS Node Gateway；Node 只读取隔离 Neon staging 数据库。Vercel 前端**不配置数据库密码**。
 
 - Vercel Preview 环境变量需显式设置 `SUIYUAN_DEPLOY_MODE=staging`、`SUIYUAN_BACKEND_ORIGIN=https://<真实 Staging 后端>`；缺少配置时部署失败而不是静默连接正式站点。
 - `node scripts/vercel-build.mjs` 为 Vercel 构建根路径资源，原 VibeX 的相对资源路径不变。`pnpm vercel:check` 仅对已构建静态文件和转发配置进行只读自检。
