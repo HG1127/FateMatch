@@ -1,0 +1,39 @@
+# Isolated pre-production deployment. This stack MUST NOT point at public or production credentials.
+# Use a separate staging database, a staging_* schema, and a dedicated persistent uploads volume.
+name: suiyuan-staging
+
+services:
+  suiyuan-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: suiyuan:staging
+    environment:
+      # Values must be supplied via an external secrets manager / process environment.
+      NEON_DSN: ${STAGING_NEON_DSN:?Provide a dedicated staging-only database credential}
+      NEON_SCHEMA: ${STAGING_SCHEMA:?Use an isolated staging_* schema, never public}
+      SY_ADMIN_EMAILS: ${STAGING_ADMIN_EMAILS:-}
+      TRUSTED_PROXY_IPS: ${STAGING_TRUSTED_PROXY_IPS:-}
+      NODE_ENV: production
+      STAGING_MODE: "1"
+      PORT: "8080"
+      HOST: 0.0.0.0
+      UPLOAD_DIR: /var/lib/suiyuan/uploads
+    ports:
+      - "127.0.0.1:${STAGING_PORT:-8081}:8080"
+    volumes:
+      - staging_uploads:/var/lib/suiyuan/uploads
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    pids_limit: 256
+
+volumes:
+  staging_uploads:

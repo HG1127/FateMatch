@@ -28,6 +28,12 @@ vibex-local/bin/**/pb_data/
 !.env.example
 !.env.*.example
 
+# 封闭试点名单、同意记录、运营私有日报与反向代理认证密码文件（只能保存在受限系统）
+pilot-private/
+deploy/private/
+.htpasswd*
+*.htpasswd
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

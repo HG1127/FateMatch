@@ -24,6 +24,7 @@ import { createEventHandlers } from './domains/events.mjs'
 import { createAdminHandlers } from './domains/admin.mjs'
 import { createStaticSiteHandler } from './static-site.mjs'
 import { createClientIpResolver } from './client-ip.mjs'
+import { registerIdlePoolErrorHandler } from './db-pool-health.mjs'
 
 const PORT = Number(process.env.PORT ?? 7000)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -31,6 +32,10 @@ const SERVE_STATIC = process.env.SERVE_STATIC === '1'
 let staticSite = null
 const SCHEMA = process.env.NEON_SCHEMA ?? 'public'
 if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(SCHEMA)) throw new Error('NEON_SCHEMA 无效')
+const STAGING_MODE = process.env.STAGING_MODE === '1'
+if (STAGING_MODE && (!/^staging_[a-z0-9_]{3,48}$/.test(SCHEMA) || SCHEMA === 'staging_public')) {
+  throw new Error('预发布模式只允许 staging_* schema，禁止指向 public')
+}
 const DSN = process.env.NEON_DSN
 const ADMIN_EMAILS = new Set(
   String(process.env.SY_ADMIN_EMAILS ?? process.env.ADMIN_EMAILS ?? '')
@@ -54,6 +59,7 @@ const pool = new pg.Pool({
   connectionTimeoutMillis: 15000,
   idleTimeoutMillis: 60000,
 })
+registerIdlePoolErrorHandler(pool)
 
 /** 带重试的查询：外网出口偶发抖动时自动重连 */
 async function q(text, params) {
@@ -1521,6 +1527,11 @@ async function readBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (STAGING_MODE) {
+    // Search-crawler exclusion is not authentication: keep staging behind an access gate.
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+    res.setHeader('Cache-Control', 'no-store')
+  }
   const t0 = Date.now()
   const url = new URL(req.url, 'http://localhost')
   const path = SERVE_STATIC && (url.pathname === '/__pb/api' || url.pathname.startsWith('/__pb/api/'))

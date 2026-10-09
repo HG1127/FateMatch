@@ -42,6 +42,23 @@ pnpm release:check:strict # 必要条件缺失时退出非零，阻止误发布
 
 GitHub Actions 分为 `.github/workflows/quality.yml`（代码质量）与 `.github/workflows/ci.yml`（生产 Docker 镜像构建 + 运行时资产自检）。CI 必须在受控分支提交并推送后才能运行；本机没有 Docker Engine 时不能用 Compose 静态检查代替镜像运行验收。
 
+## 预发布与手机/真人试点（独立 staging）
+
+预发布必须配置**独立 Neon 数据库及 staging_* schema**，并通过受限 HTTPS 入口访问；严禁让测试人员访问正式 public 数据。工程已提供：
+
+```bash
+pnpm staging:check                        # 只读检查，禁止 public
+pnpm staging:migrate                      # 默认数据库 dry-run
+# 经负责人确认 staging 数据库并备份后才运行：
+# pnpm staging:migrate --apply --confirm=staging_rc1
+# docker compose -f compose.staging.yml up -d --build
+pnpm staging:smoke                        # 本地 127.0.0.1:8081 只读健康/资源检查
+```
+
+部署前通过受管进程环境提供 `STAGING_NEON_DSN`、`STAGING_SCHEMA`、可选 `STAGING_PORT`；不得写入 Git。本地 Docker Engine 不可用时可先借助一次性隔离 Neon schema 跑 `pnpm e2e`，但不等同于公网 staging 部署。手机触控模拟测试在 `e2e/mobile-acceptance.spec.ts`，真实 iPhone Safari / Android Chrome 仍需持有实体设备的志愿者验收。杭州真人试点须经同意且已具备安全举报/退出流程，不会由测试代码伪造真人行为。
+
+交付与闸门：`docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`。
+
 ## 生产：独立同源前后端
 
 ```bash
@@ -75,4 +92,4 @@ IP 限流默认仅信任真实 socket 对端。若确有反向代理，才可通
 - `public` 迁移、数据清除/恢复、发布覆盖均须先备份并独立验收；日常测试只使用临时隔离 schema。
 - 每次发布前均应检查 Git 工作区、代码保密规则与部署版本；禁止未经审查执行 `git add .`、整库强制覆盖或删除正式回归测试。
 
-**继续阅读：** `docs/18-完整前后端发布候选与运维交接.md`、`docs/17-完整前后端生产部署与验收.md`、`docs/12-发布与回退手册.md`、`docs/07-契约设计.md`、`docs/16-关系反馈试点验收与发布清单.md`。
+**继续阅读：** `docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`、`docs/18-完整前后端发布候选与运维交接.md`、`docs/17-完整前后端生产部署与验收.md`、`docs/12-发布与回退手册.md`。

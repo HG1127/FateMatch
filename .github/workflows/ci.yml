@@ -8,6 +8,7 @@ on:
       - Dockerfile
       - .dockerignore
       - compose.prod.yml
+      - compose.staging.yml
       - package.json
       - pnpm-lock.yaml
       - 'server/**'
@@ -19,6 +20,7 @@ on:
       - 'scripts/neon-schema.sql'
       - 'scripts/neon-migrations.sql'
       - 'scripts/start-prod.mjs'
+      - 'scripts/staging-*.mjs'
   push:
     branches: [main]
   workflow_dispatch:
@@ -37,6 +39,13 @@ jobs:
         env:
           NEON_DSN: postgresql://not-used.invalid/ci
         run: docker compose -f compose.prod.yml config --quiet
+      - name: 验证预发布隔离配置（模板凭据，绝不连接数据库）
+        env:
+          STAGING_NEON_DSN: postgresql://not-used.invalid/staging
+          STAGING_SCHEMA: staging_ci_preview
+        run: |
+          node scripts/staging-preflight.mjs
+          docker compose -f compose.staging.yml config --quiet
       - uses: docker/setup-buildx-action@v3
       - name: 构建生产镜像（不推送、不注入任何数据库凭据）
         uses: docker/build-push-action@v6
