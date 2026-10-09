@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { CalendarHeart, ChevronDown, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
 import { useStore } from '@/lib/store-context'
@@ -38,42 +38,125 @@ const MORE = [
   { to: '/badges', label: '成长记录', desc: '辅助记录，不代表人格信用' },
 ]
 
-function MoreDropdown() {
+export function MoreDropdown() {
   const [open, setOpen] = useState(false)
   const { pathname } = useLocation()
   const active = MORE.some(m => pathname === m.to)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pointerTypeRef = useRef('mouse')
+  const panelId = useId()
+
+  const cancelClose = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }
+  const closeMenu = () => {
+    cancelClose()
+    setOpen(false)
+  }
+  const scheduleClose = () => {
+    cancelClose()
+    // A short grace period tolerates diagonal mouse movement without flicker.
+    closeTimerRef.current = window.setTimeout(() => setOpen(false), 180)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!dropdownRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setOpen(false)
+        triggerRef.current?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current)
+  }, [])
 
   return (
-    <div className="relative" onMouseLeave={() => setOpen(false)}>
+    <div
+      ref={dropdownRef}
+      className="relative"
+      onMouseEnter={cancelClose}
+      onMouseLeave={scheduleClose}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) closeMenu()
+      }}
+    >
       <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-controls={panelId}
         className={cn(
           'relative flex items-center gap-0.5 rounded-md px-3 py-2 text-sm transition',
           active || open ? 'font-semibold text-primary' : 'text-foreground/70 hover:bg-muted hover:text-foreground',
         )}
-        onClick={() => setOpen(o => !o)}
+        onMouseEnter={() => {
+          cancelClose()
+          setOpen(true)
+        }}
+        onPointerDown={event => { pointerTypeRef.current = event.pointerType }}
+        onClick={event => {
+          cancelClose()
+          // Mouse hover opens the menu; clicking should not immediately close it.
+          // Touch and keyboard activations still toggle it explicitly.
+          if (event.detail === 0 || pointerTypeRef.current !== 'mouse') {
+            setOpen(value => !value)
+          } else {
+            setOpen(true)
+          }
+        }}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowDown') return
+          event.preventDefault()
+          cancelClose()
+          setOpen(true)
+          window.requestAnimationFrame(() => panelRef.current?.querySelector<HTMLAnchorElement>('a')?.focus())
+        }}
       >
         更多
         <ChevronDown size={13} className={cn('transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <div className="card-cn animate-dropdown-in absolute right-0 top-full mt-1 w-52 overflow-visible rounded-lg p-1.5 shadow-lift">
-          {MORE.map((m, i) => (
-            <NavLink
-              key={m.to}
-              to={m.to}
-              onClick={() => setOpen(false)}
-              style={{ animationDelay: `${40 + i * 45}ms` }}
-              className={({ isActive }) =>
-                cn(
-                  'dropdown-item-in block rounded-md px-3 py-2 transition',
-                  isActive ? 'bg-primary/10' : 'hover:bg-muted',
-                )
-              }
-            >
-              <span className={cn('block text-sm', pathname === m.to ? 'font-semibold text-primary' : 'text-foreground')}>{m.label}</span>
-              <span className="block text-[10px] text-muted-foreground">{m.desc}</span>
-            </NavLink>
-          ))}
+        /* The padding on this non-animated wrapper bridges the trigger/menu gap. */
+        <div id={panelId} className="absolute right-0 top-full z-50 w-52 pt-1">
+          <nav ref={panelRef} aria-label="更多导航" className="card-cn animate-dropdown-in rounded-lg p-1.5 shadow-lift">
+            {MORE.map((m, i) => (
+              <NavLink
+                key={m.to}
+                to={m.to}
+                onClick={closeMenu}
+                style={{ animationDelay: `${40 + i * 45}ms` }}
+                className={({ isActive }) =>
+                  cn(
+                    'dropdown-item-in block rounded-md px-3 py-2 transition',
+                    isActive ? 'bg-primary/10' : 'hover:bg-muted',
+                  )
+                }
+              >
+                <span className={cn('block text-sm', pathname === m.to ? 'font-semibold text-primary' : 'text-foreground')}>{m.label}</span>
+                <span className="block text-[10px] text-muted-foreground">{m.desc}</span>
+              </NavLink>
+            ))}
+          </nav>
         </div>
       )}
     </div>
