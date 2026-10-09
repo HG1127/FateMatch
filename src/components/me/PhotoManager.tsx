@@ -1,20 +1,30 @@
 import { useRef, useState } from 'react'
-import { Camera, GripVertical, Star, X } from 'lucide-react'
+import { Camera, GripVertical, Star, X, ArrowLeft, ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
-import { readImageFile, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import { cn } from '@/lib/utils'
+import { readImageFile } from '@/lib/image-utils'
 
 export function PhotoManager() {
   const { me, addPhotos, removePhoto, setAvatar, reorderPhotos } = useStore()
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [overIdx, setOverIdx] = useState<number | null>(null)
+  const [saving, setSaving] = useState(false)
   if (!me) return null
   const full = me.photos.length >= 6
 
   const finishDrag = () => {
     setDragIdx(null)
     setOverIdx(null)
+  }
+  const movePhoto = (from: number, to: number) => {
+    if (saving || from === to || to < 0 || to >= me.photos.length) return
+    setSaving(true)
+    void reorderPhotos(from, to)
+      .then(() => toast.success(from === 0 || to === 0 ? '照片顺序及头像已更新' : '照片顺序已保存'))
+      .catch(err => toast.error(err instanceof Error ? err.message : '照片顺序未保存，请重试'))
+      .finally(() => setSaving(false))
   }
 
   return (
@@ -29,14 +39,16 @@ export function PhotoManager() {
           const files = Array.from(e.target.files ?? []).slice(0, 6 - me.photos.length)
           e.target.value = ''
           if (!files.length) return
+          if (saving) return
+          setSaving(true)
           try {
-            const urls = await Promise.all(files.map(f => readImageFile(f, 600)))
-            const firstNew = me.photos.length
-            addPhotos(urls)
-            setAvatar(firstNew)
-            toast.success(`已上传 ${urls.length} 张照片,并自动设为头像`)
-          } catch {
-            toast.error('部分图片读取失败,请换一张')
+            const urls = await Promise.all(files.map(f => readImageFile(f, 600, 'profile')))
+            await addPhotos(urls)
+            toast.success(`已上传 ${urls.length} 张照片,第一张新照片已设为头像`)
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : '照片未保存成功,请重试')
+          } finally {
+            setSaving(false)
           }
         }}
       />
@@ -59,11 +71,7 @@ export function PhotoManager() {
             }}
             onDrop={e => {
               e.preventDefault()
-              if (dragIdx !== null && dragIdx !== i) {
-                reorderPhotos(dragIdx, i)
-                if (dragIdx === 0 || i === 0) toast.success('照片顺序已调整,头像已同步更新')
-                else toast('照片顺序已调整')
-              }
+              if (dragIdx !== null && dragIdx !== i) movePhoto(dragIdx, i)
               finishDrag()
             }}
           >
@@ -79,7 +87,7 @@ export function PhotoManager() {
               }}
               onDragEnd={finishDrag}
             />
-            <span className="pointer-events-none absolute left-1.5 bottom-1.5 inline-flex items-center gap-0.5 rounded-sm bg-red-ink/60 px-1 py-0.5 text-[10px] text-primary-foreground/80 opacity-0 transition group-hover:opacity-100">
+            <span className="pointer-events-none absolute left-1.5 bottom-1.5 inline-flex items-center gap-0.5 rounded-sm bg-red-ink/60 px-1 py-0.5 text-[10px] text-primary-foreground/80 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
               <GripVertical size={10} />
               拖拽排序
             </span>
@@ -92,23 +100,37 @@ export function PhotoManager() {
               <button
                 aria-label="设为头像"
                 title="设为头像"
-                className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-sm bg-red-ink/70 px-1.5 py-0.5 text-[10px] text-primary-foreground opacity-0 transition hover:bg-red-ink group-hover:opacity-100"
+                className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-sm bg-red-ink/70 px-1.5 py-0.5 text-[10px] text-primary-foreground opacity-100 transition hover:bg-red-ink md:opacity-0 md:group-hover:opacity-100"
+                disabled={saving}
                 onClick={() => {
-                  setAvatar(i)
-                  toast.success('已设为头像,全站同步生效')
+                  if (saving) return
+                  setSaving(true)
+                  void setAvatar(i)
+                    .then(() => toast.success('头像已确认保存,全站同步生效'))
+                    .catch(err => toast.error(err instanceof Error ? err.message : '头像未保存,请重试'))
+                    .finally(() => setSaving(false))
                 }}
               >
                 <Star size={10} />
                 设为头像
               </button>
             )}
+            {me.photos.length > 1 && <div className="absolute bottom-1 right-1 flex gap-1 md:hidden">
+              <button aria-label={`将第 ${i + 1} 张照片前移`} className="rounded bg-card/95 p-1 text-primary disabled:opacity-40" disabled={saving || i === 0} onClick={() => movePhoto(i, i - 1)}><ArrowLeft size={15} /></button>
+              <button aria-label={`将第 ${i + 1} 张照片后移`} className="rounded bg-card/95 p-1 text-primary disabled:opacity-40" disabled={saving || i >= me.photos.length - 1} onClick={() => movePhoto(i, i + 1)}><ArrowRight size={15} /></button>
+            </div>}
             {me.photos.length > 1 && (
               <button
                 aria-label="删除照片"
-                className="absolute right-1.5 top-1.5 rounded-full bg-red-ink/70 p-1 text-primary-foreground opacity-0 transition group-hover:opacity-100"
+                className="absolute right-1.5 top-1.5 rounded-full bg-red-ink/70 p-1 text-primary-foreground opacity-100 transition md:opacity-0 md:group-hover:opacity-100"
+                disabled={saving}
                 onClick={() => {
-                  removePhoto(i)
-                  toast('已删除一张照片')
+                  if (saving) return
+                  setSaving(true)
+                  void removePhoto(i)
+                    .then(() => toast.success('照片已删除并保存'))
+                    .catch(err => toast.error(err instanceof Error ? err.message : '照片未删除,请重试'))
+                    .finally(() => setSaving(false))
                 }}
               >
                 <X size={12} />
@@ -119,14 +141,15 @@ export function PhotoManager() {
         {!full && (
           <button
             className="flex aspect-[3/4] flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border text-muted-foreground transition hover:border-primary/60 hover:text-primary"
-            onClick={() => inputRef.current?.click()}
+            disabled={saving}
+            onClick={() => !saving && inputRef.current?.click()}
           >
             <Camera size={22} />
             <span className="text-xs">上传照片</span>
           </button>
         )}
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">最多 6 张,第一张为头像;新上传的照片自动成为头像,拖动照片可调顺序,也可把鼠标移到照片上「设为头像」。</p>
+      <p className="mt-2 text-xs text-muted-foreground">最多 6 张，第一张为头像。电脑端拖拽调整顺序，手机端使用左右箭头调整；所有修改均在服务端确认后生效。{saving ? ' 正在保存…' : ''}</p>
     </div>
   )
 }

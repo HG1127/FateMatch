@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { HeartHandshake, Sparkles } from 'lucide-react'
-import { ageOf, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
+import { ageOf } from '@/lib/store-model'
 
 const PILLARS = ['每日少量推荐', '兴趣与城市参考', '双方有意后聊天', '线下活动延伸']
 

@@ -1,0 +1,13 @@
+# Production example — do not place actual credentials in this file or in Git.
+# Supply NEON_DSN from your secret manager / process environment instead.
+# NEON_DSN=postgresql://<account>:<password>@<host>/<db>?sslmode=require
+PORT=8080
+HOST=0.0.0.0
+NEON_SCHEMA=public
+# Must be an absolute path on a persistent volume outside the project dist/ directory.
+# UPLOAD_DIR=/var/lib/suiyuan/uploads
+# SY_ADMIN_EMAILS=admin@example.com
+# TRUSTED_PROXY_IPS=127.0.0.1  # Configure only the direct proxy peer's exact IP.
+# Leave unset when serving directly. NEVER trust arbitrary client X-Forwarded-For.
+# The proxy must overwrite: proxy_set_header X-Forwarded-For $remote_addr;
+# Put TLS/domain/reverse-proxy configuration in deployment infrastructure.

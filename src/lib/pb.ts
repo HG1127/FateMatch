@@ -1,6 +1,6 @@
 import PocketBase, { LocalAuthStore } from "pocketbase"
-
-import { getAuthHeaders } from "./auth"
+import { PB_USER_AUTH_HEADER, isDirectPbHostName, pbAuthHeaderForHost } from './pb-auth'
+export { PB_USER_AUTH_HEADER, pbAuthHeaderForHost } from './pb-auth'
 
 // VibeX 把每个 app 部署在子路径下 (/app-preview/app-<32hex>/ 或 /p/app-<32hex>/)。
 // 这个正则提取该前缀; 本地直跑 dev (无前缀)时返回 null。
@@ -44,32 +44,28 @@ export const pb = new PocketBase(getPocketBaseUrl(), new LocalAuthStore(AUTH_STO
 // 形态 (app-preview / 发布 / 沙箱域), PB token 一律改走 X-Pb-Auth 自定义头,
 // 由 control 在转发给 PocketBase 之前还原成 Authorization, 对 PB 侧无感。
 // 本地直连 PB (localhost / 裸 IP, 中间没有 control) 时保持 Authorization 原样。
-export const PB_USER_AUTH_HEADER = "X-Pb-Auth"
-
 export function isDirectPbHost(): boolean {
-  if (typeof window === "undefined") return false
-  const host = window.location.hostname
-  return host === "localhost" || host === "[::1]" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
+  if (typeof window === 'undefined') return false
+  return isDirectPbHostName(window.location.hostname)
 }
 
 // 裸 fetch (aigc.ts / llm.ts 等) 统一用这个拿 PB 登录头; 未登录返回空对象。
 export function pbAuthHeader(token?: string | null): Record<string, string> {
-  if (!token) return {}
-  return isDirectPbHost() ? { Authorization: token } : { [PB_USER_AUTH_HEADER]: token }
+  const host = typeof window === "undefined" ? "" : window.location.hostname
+  return pbAuthHeaderForHost(token, host)
 }
 
-// B1 沙箱域(*.apps.vibex.cn)上访问者身份靠 X-Vibex-Scoped-Token 承载
-// (老域 getAuthHeaders() 返回空对象, 零影响)。挂在 SDK 层, 让所有
-// pb.collection(...) 请求自动携带, 业务代码不用感知。
-// 同时把 SDK 自动附加的 PB Authorization 改名为 X-Pb-Auth (原因见上)。
+// PB SDK 请求统一在这里处理自身登录令牌；不再反向依赖 auth.ts，避免
+// pb.ts → auth.ts → localAuth.ts → pb.ts 的模块环。
+// 经 control 代理时把 SDK 自动附加的 Authorization 改名为 X-Pb-Auth。
 pb.beforeSend = (url, options) => {
   const headers: Record<string, string> = { ...((options.headers as Record<string, string>) || {}) }
   const token = pb.authStore.token
-  if (token && !isDirectPbHost() && headers["Authorization"] === token) {
+  const authHeaders = pbAuthHeader(token)
+  if (token && PB_USER_AUTH_HEADER in authHeaders && headers["Authorization"] === token) {
     delete headers["Authorization"]
-    headers[PB_USER_AUTH_HEADER] = token
   }
-  options.headers = { ...headers, ...getAuthHeaders() }
+  options.headers = { ...headers, ...authHeaders }
   return { url, options }
 }
 

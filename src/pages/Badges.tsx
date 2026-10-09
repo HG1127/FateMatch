@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Lock, Share2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import { buildBadges, yuanLevel, LEVEL_TIERS, type BadgeDef } from '@/lib/badges'
-import { TIER_STYLES, Confetti } from '@/components/ui'
+import { Confetti } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { TIER_STYLES } from '@/components/ui-constants'
 
 /** 获得日期: 2026·09·04 */
 const fmtDate = (t?: number) => {
@@ -15,7 +16,7 @@ const fmtDate = (t?: number) => {
 
 export function BadgesPage() {
   const store = useStore()
-  const { me, update } = store
+  const { me, saveProfile } = store
   const [tab, setTab] = useState<'all' | 'done' | 'todo'>('all')
   const [byDate, setByDate] = useState(false)
   const [celebrate, setCelebrate] = useState<BadgeDef | null>(null)
@@ -45,7 +46,7 @@ export function BadgesPage() {
     const next = { ...(me.badgeDates ?? {}) }
     const now = Date.now()
     missing.forEach(b => { next[b.id] = now })
-    update({ badgeDates: next })
+    void saveProfile({ badgeDates: next }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doneKey, me?.id])
   if (!me) return null

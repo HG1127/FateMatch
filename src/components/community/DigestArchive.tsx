@@ -1,10 +1,8 @@
 import { X } from 'lucide-react'
-import { useStore } from '@/lib/store'
 import type { WeeklyDigest } from '@/lib/store'
 
 /** 往期合集书架: 从全部已发布期刊里挑一期翻阅 */
 export function DigestArchive({ digests, onClose, onPick }: { digests: WeeklyDigest[]; onClose: () => void; onPick: (d: WeeklyDigest) => void }) {
-  const { posts } = useStore()
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-red-ink/60 backdrop-blur-sm md:items-center md:p-6" onClick={onClose}>
       <div
@@ -24,7 +22,7 @@ export function DigestArchive({ digests, onClose, onPick }: { digests: WeeklyDig
         </div>
         <div className="space-y-3">
           {digests.map((d, i) => {
-            const alive = d.postIds.filter(id => posts.some(p => p.id === id)).length
+            const alive = d.postIds.length
             return (
               <button
                 key={d.id}

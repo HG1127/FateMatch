@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CalendarHeart, CheckCircle2, ChevronDown, Circle, Compass } from 'lucide-react'
-import { completeness, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
+import { isProfileReadyForMatching } from '@/lib/store-model'
 import { cn } from '@/lib/utils'
 
 const D = 86400_000
@@ -18,7 +19,7 @@ const readFold = (): { rite?: boolean; week?: boolean } => {
 }
 
 export function TaskBoard() {
-  const { me, tour, conversations, favs, events, posts, checkins, users, chatWith, visits } = useStore()
+  const { me, tour, likesOf, activityStats, users, chatWith, visits } = useStore()
   const [riteOpen, setRiteOpen] = useState(() => readFold().rite ?? true)
   const [weekOpen, setWeekOpen] = useState(() => readFold().week ?? true)
   const foldRite = (v: boolean) => {
@@ -40,16 +41,9 @@ export function TaskBoard() {
   if (!me) return null
 
   const tasks = [
-    { done: completeness(me).pct >= 60, text: '完善基础资料(完善度 ≥ 60%)', desc: '用心写的资料,会替你开口' },
-    { done: me.photos.length >= 2, text: '上传至少 2 张照片', desc: '一张是缘分,两张是诚意' },
-    { done: Object.values(me.verification).filter(Boolean).length >= 1, text: '点亮任意一枚验证徽章', desc: '诚信的人,运气不会差', to: '/verify' },
-    { done: !!tour.yuanfen, text: '逛一逛今日随缘', desc: '每天 3 位,缘不贪多', to: '/yuanfen' },
-    { done: conversations().length > 0, text: '向一位有缘人送声招呼', desc: '开口即是缘起', to: '/matches' },
-    { done: favs.users.length + favs.posts.length + favs.events.length > 0, text: '收藏一位佳人或一篇分享', desc: '把心动先存起来', to: '/explore' },
-    { done: events.some(e => e.attendees.includes(me.id)), text: '报名一场线下活动', desc: '见面三分情,缘分也讲当面', to: '/events' },
-    { done: !!tour.digest, text: '翻阅一辑每周精选', desc: '掌柜把一周最动人编成了集', to: '/community' },
-    { done: posts.some(p => p.authorId === me.id), text: '在社区发一篇分享', desc: '让别人先看见你的生活', to: '/community' },
-    { done: (checkins[me.id] ?? []).length > 0, text: '活动现场打卡一次', desc: '到场那一刻,缘就落地了', to: '/events' },
+    { done: isProfileReadyForMatching(me), text: '确认必要真实资料', desc: '性别、希望认识的对象、出生日期与城市都由本人确认', to: '/me#profile-editor' },
+    { done: !!tour.yuanfen, text: '看过一次今日推荐', desc: '先理解推荐理由，再判断是否适合进一步了解', to: '/yuanfen' },
+    { done: likesOf(me.id).length > 0, text: '本人确认并表达一次「有意」', desc: '不替你自动开口；每一次有意都来自你的真实选择', to: '/yuanfen' },
   ]
   const done = tasks.filter(t => t.done).length
 
@@ -65,7 +59,7 @@ export function TaskBoard() {
     }
   }
   const visitedOut = Object.values(visits).some(list => list.some(v => v.id === me.id && v.at >= weekStart))
-  const commented = posts.some(p => p.comments.some(c => c.authorId === me.id && c.at >= weekStart))
+  const commented = activityStats.lastCommentAt >= weekStart
   const weekly = [
     { done: sentThisWeek > 0, text: '送出一声招呼', desc: '开口,就是缘起', to: '/matches' },
     { done: visitedOut, text: '回访一位有缘人', desc: '回望的目光,最动人', to: '/explore' },
@@ -115,7 +109,7 @@ export function TaskBoard() {
           (done === tasks.length ? (
             <>
               <p className="mt-4 rounded-md bg-gold/10 p-4 text-center text-sm text-gold">
-                诸事皆备,新人礼成。接下来,只管真诚地去遇见。
+                三步已完成。接下来不必刷任务，只管按自己的节奏认真认识人。
               </p>
               <Link to="/badges" className="mt-2 block text-center text-xs text-primary transition hover:text-primary/80">
                 「新人礼成」勋章已点亮,去看看 →
@@ -135,7 +129,7 @@ export function TaskBoard() {
         </button>
         {weekOpen && (
           <>
-            <p className="cjk-latin mt-1 text-[11px] text-muted-foreground">第 {weekNo} 周 · 每周一归零重刷,缘不嫌多</p>
+            <p className="cjk-latin mt-1 text-[11px] text-muted-foreground">第 {weekNo} 周 · 每周一更新，按自己的节奏完成</p>
             <ul className="mt-3 space-y-2">{weekly.map(renderTask)}</ul>
           </>
         )}

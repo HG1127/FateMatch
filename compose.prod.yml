@@ -1,0 +1,39 @@
+# Optional standalone deployment behind an HTTPS reverse proxy.
+# Do not put NEON_DSN into tracked .env files; inject it via your host secret manager.
+name: suiyuan
+
+services:
+  suiyuan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: suiyuan:standalone
+    environment:
+      NEON_DSN: ${NEON_DSN:?NEON_DSN must be provided via a secret manager or runtime environment}
+      NEON_SCHEMA: ${NEON_SCHEMA:-public}
+      SY_ADMIN_EMAILS: ${SY_ADMIN_EMAILS:-}
+      # Only the immediate reverse proxy's real address may supply X-Forwarded-For.
+      # The reverse proxy MUST overwrite the header, never append untrusted input.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      NODE_ENV: production
+      PORT: "8080"
+      HOST: 0.0.0.0
+      UPLOAD_DIR: /var/lib/suiyuan/uploads
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    volumes:
+      - suiyuan_uploads:/var/lib/suiyuan/uploads
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    pids_limit: 256
+
+volumes:
+  suiyuan_uploads:

@@ -2,7 +2,8 @@ import { Component, lazy, Suspense, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
-import { StoreProvider, useStore } from '@/lib/store'
+import { StoreProvider } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { FeatureKey } from '@/lib/store'
 import { portrait } from '@/lib/art'
 import { getBasename } from '@/lib/pb'
@@ -24,6 +25,7 @@ const FavoritesPage = lazy(() => import('@/pages/Favorites').then((m) => ({ defa
 const ReportPage = lazy(() => import('@/pages/Report').then((m) => ({ default: m.ReportPage })))
 const BadgesPage = lazy(() => import('@/pages/Badges').then((m) => ({ default: m.BadgesPage })))
 const AdminPage = lazy(() => import('@/pages/Admin').then((m) => ({ default: m.AdminPage })))
+const TrustPage = lazy(() => import('@/pages/Trust').then((m) => ({ default: m.TrustPage })))
 
 /** 路由切换加载代码包时的过渡 */
 function PageLoading() {
@@ -62,11 +64,27 @@ function ImgGuard() {
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { account, booted } = useStore()
+  const { account, booted, dataReady, bootError, retryBoot } = useStore()
+  const location = useLocation()
   if (!booted) {
-    return <div className="clouds-paper flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground">正在载入你的缘分…</div>
+    return <div className="clouds-paper flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground">正在载入你的真实数据…</div>
   }
-  if (!account) return <Navigate to="/auth" replace />
+  if (!account) return <Navigate to={`/auth?from=${encodeURIComponent(location.pathname + location.search)}`} replace />
+  if (!dataReady) {
+    return (
+      <div className="clouds-paper mx-auto flex min-h-[60vh] max-w-lg items-center px-4 py-16">
+        <div className="card-cn w-full rounded-lg p-6 text-center md:p-8">
+          <span className="seal mx-auto flex h-12 w-12 font-xing text-lg">停</span>
+          <h1 className="mt-4 font-xing text-3xl text-foreground">数据还没有可信加载</h1>
+          <p className="mt-2 text-sm leading-7 text-muted-foreground">
+            {bootError || '当前无法确认服务端数据状态。为避免把旧状态误当成真实数据，已暂停进入业务页面。'}
+          </p>
+          <button className="btn-primary mt-5" onClick={retryBoot}>重新加载数据</button>
+          <p className="mt-3 text-[11px] text-muted-foreground">重新加载成功前，不会执行自动保存或关系操作。</p>
+        </div>
+      </div>
+    )
+  }
   return <>{children}</>
 }
 
@@ -98,8 +116,13 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { msg: string }> 
   render() {
     if (this.state.msg) {
       return (
-        <div style={{ padding: 40, fontFamily: 'monospace', fontSize: 13, color: '#9e2130', whiteSpace: 'pre-wrap' }}>
-          页面渲染出错,已自动上报: {this.state.msg}
+        <div role="alert" className="clouds-paper flex min-h-[60vh] flex-col items-center justify-center px-4 py-16 text-center">
+          <h1 className="font-xing text-3xl text-foreground">页面渲染出错</h1>
+          <p className="mt-3 max-w-lg text-sm leading-7 text-muted-foreground">当前页面暂时无法显示。请尝试重新加载；如问题持续出现，可联系平台工作人员。</p>
+          <div className="mt-5 flex flex-wrap justify-center gap-3">
+            <button className="btn-primary" onClick={() => window.location.reload()}>重新加载</button>
+            <button className="btn-outline" onClick={() => { window.location.href = getBasename() }}>返回首页</button>
+          </div>
         </div>
       )
     }
@@ -120,6 +143,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<HomePage />} />
             <Route path="/auth" element={<AuthPage />} />
+            <Route path="/trust" element={<TrustPage />} />
             <Route path="/login" element={<Navigate to="/auth" replace />} />
             <Route path="/register" element={<Navigate to={{ pathname: '/auth', search: '?mode=register' }} replace />} />
             <Route path="/yuanfen" element={<RequireAuth><RequireFeature k="yuanfen"><YuanfenPage /></RequireFeature></RequireAuth>} />

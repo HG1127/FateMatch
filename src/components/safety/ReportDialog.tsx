@@ -1,23 +1,33 @@
 import { useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { REPORT_REASONS, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
 import { Modal } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { REPORT_REASONS } from '@/lib/store-model'
 
 export function ReportDialog({ user, onClose }: { user: User | null; onClose: () => void }) {
   const { reportUser } = useStore()
   const [reason, setReason] = useState('')
   const [note, setNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   if (!user) return null
 
-  const submit = () => {
+  const submit = async () => {
     if (!reason) return toast.error('请先选择举报原因')
-    reportUser(user.id, reason, note.trim())
-    toast.success('举报已提交,我们会在 24 小时内核查处理')
-    onClose()
+    if (submitting) return
+    setSubmitting(true)
+    try {
+      const id = await reportUser(user.id, reason, note.trim())
+      toast.success(`举报已受理 · 编号 ${id}`)
+      onClose()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '举报未提交成功,请重试')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -27,7 +37,7 @@ export function ReportDialog({ user, onClose }: { user: User | null; onClose: ()
           <ShieldCheck size={20} className="text-gold" />
           举报 {user.nickname}
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">感谢你的认真。每一条举报都会被人工核查,你的隐私不会泄露给对方。</p>
+        <p className="mt-1 text-xs text-muted-foreground">感谢你的反馈。提交成功后会生成受理编号；处理进度与结果以平台实际状态为准，举报内容不会作为公开资料展示给对方。</p>
         <div className="mt-4 space-y-2">
           {REPORT_REASONS.map(r => (
             <button
@@ -51,7 +61,7 @@ export function ReportDialog({ user, onClose }: { user: User | null; onClose: ()
         />
         <div className="mt-4 grid grid-cols-2 gap-3">
           <button className="btn-outline !py-2.5" onClick={onClose}>再想想</button>
-          <button className="btn-primary !py-2.5" onClick={submit}>提交举报</button>
+          <button className="btn-primary !py-2.5 disabled:opacity-50" disabled={submitting} onClick={() => void submit()}>{submitting ? '提交中…' : '提交举报'}</button>
         </div>
       </div>
     </Modal>

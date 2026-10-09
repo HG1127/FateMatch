@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
-import { BellRing, CalendarPlus } from 'lucide-react'
-import { useStore } from '@/lib/store'
-import type { EventItem } from '@/lib/store'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BellRing, CalendarPlus, Loader2, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
+import { useStore } from '@/lib/store-context'
+import type { EventItem, EventListScope } from '@/lib/store-types'
+import { daysUntil } from '@/lib/store-model'
 import { EventCard } from '@/components/events/EventCard'
 import { EventCalendar } from '@/components/events/EventCalendar'
 import { EventDetail } from '@/components/events/EventDetail'
@@ -18,41 +20,157 @@ const FILTERS = [
 
 type FilterKey = (typeof FILTERS)[number]['key']
 
+const scopeOf = (filter: FilterKey): EventListScope =>
+  filter === 'all' ? 'upcoming' : filter === 'calendar' ? 'calendar' : filter
+
 export function EventsPage() {
-  const { events, me, upcomingReminded, settings } = useStore()
+  const { events, reminders, loadEventsPage, loadEventDetail } = useStore()
   const [filter, setFilter] = useState<FilterKey>('all')
-  const [detail, setDetail] = useState<EventItem | null>(null)
+  const [visibleIds, setVisibleIds] = useState<string[]>([])
+  const [pastIds, setPastIds] = useState<string[]>([])
+  const [calendarIds, setCalendarIds] = useState<string[]>([])
+  const [page, setPage] = useState(1)
+  const [totalItems, setTotalItems] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [calendarLoading, setCalendarLoading] = useState(false)
+  const [calendarError, setCalendarError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
+  const [detailId, setDetailId] = useState('')
+  const [openingId, setOpeningId] = useState('')
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<EventItem | null>(null)
+  const loadEventsRef = useRef(loadEventsPage)
+  const loadDetailRef = useRef(loadEventDetail)
 
-  const soon = useMemo(() => upcomingReminded().filter(x => x.days <= 7), [upcomingReminded, events])
+  useEffect(() => { loadEventsRef.current = loadEventsPage }, [loadEventsPage])
+  useEffect(() => { loadDetailRef.current = loadEventDetail }, [loadEventDetail])
 
-  // 被管理员隐藏的活动: 发起人与管理员自己仍可见, 其余人不展示
-  const shown = useMemo(
-    () => events.filter(e => !settings.hiddenEvents.includes(e.id) || me?.role === 'admin' || e.creatorId === me?.id),
-    [events, settings.hiddenEvents, me],
+  useEffect(() => {
+    if (filter === 'calendar') return
+    let alive = true
+    void loadEventsRef.current({
+      page: 1,
+      perPage: 18,
+      scope: scopeOf(filter),
+      localFirst: filter === 'all' || filter === 'hanfu',
+    })
+      .then(res => {
+        if (!alive) return
+        setVisibleIds(res.items.map(e => e.id))
+        setPage(res.page)
+        setTotalItems(res.totalItems)
+        setTotalPages(res.totalPages)
+        setError('')
+      })
+      .catch(e => {
+        if (alive) setError(e instanceof Error ? e.message : '活动列表加载失败')
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => { alive = false }
+  }, [filter, retryKey])
+
+  useEffect(() => {
+    let alive = true
+    void loadEventsRef.current({ page: 1, perPage: 6, scope: 'past', localFirst: false })
+      .then(res => {
+        if (alive) setPastIds(res.items.map(e => e.id))
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  const reminderKey = reminders.join('|')
+  useEffect(() => {
+    const ids = reminderKey ? reminderKey.split('|').filter(Boolean) : []
+    if (!ids.length) return
+    void loadEventsRef.current({ page: 1, perPage: Math.min(36, ids.length), ids, localFirst: false }).catch(() => {})
+  }, [reminderKey])
+
+  const list = visibleIds.map(id => events.find(e => e.id === id)).filter((e): e is EventItem => !!e)
+  const pastList = pastIds.map(id => events.find(e => e.id === id)).filter((e): e is EventItem => !!e)
+  const calendarEvents = calendarIds.map(id => events.find(e => e.id === id)).filter((e): e is EventItem => !!e)
+  const detail = detailId ? events.find(e => e.id === detailId) ?? null : null
+  const soon = useMemo(
+    () => reminders
+      .map(id => events.find(e => e.id === id))
+      .filter((e): e is EventItem => !!e)
+      .map(event => ({ event, days: daysUntil(event.date) }))
+      .filter(x => x.days >= 0 && x.days <= 7)
+      .sort((a, b) => a.days - b.days),
+    [events, reminders],
   )
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-
-  const list = useMemo(() => {
-    const browse = filter === 'all' || filter === 'hanfu'
-    // 同城活动优先: 浏览列表里与我同城的排前, 其次置顶, 再按日期
-    const sameCity = (e: EventItem) => browse && !!me?.city && e.city === me.city
-    const sorted = [...shown].sort((a, b) =>
-      Number(sameCity(b)) - Number(sameCity(a)) || Number(!!b.pinned) - Number(!!a.pinned) || a.date.localeCompare(b.date))
-    let arr = sorted
-    if (me) {
-      if (filter === 'mine') arr = sorted.filter(e => e.attendees.includes(me.id))
-      else if (filter === 'hosted') arr = sorted.filter(e => e.creatorId === me.id)
-      else if (filter === 'hanfu') arr = sorted.filter(e => e.tags.includes('汉服') || e.title.includes('汉服'))
+  const beginFilter = (next: FilterKey) => {
+    setFilter(next)
+    if (next !== 'calendar') {
+      setVisibleIds([])
+      setPage(1)
+      setLoading(true)
+      setError('')
     }
-    if (filter === 'all' || filter === 'hanfu') arr = arr.filter(e => e.date >= today)
-    return arr
-  }, [shown, filter, me, today])
+  }
 
-  // 已落幕的活动单独成「往期回顾」, 不再混在可报名列表里
-  const pastList = useMemo(() => [...shown].filter(e => e.date < today).sort((a, b) => b.date.localeCompare(a.date)), [shown, today])
+  const retry = () => {
+    setVisibleIds([])
+    setPage(1)
+    setLoading(true)
+    setError('')
+    setRetryKey(v => v + 1)
+  }
+
+  const loadMore = async () => {
+    if (loading || page >= totalPages || filter === 'calendar') return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await loadEventsRef.current({
+        page: page + 1,
+        perPage: 18,
+        scope: scopeOf(filter),
+        localFirst: filter === 'all' || filter === 'hanfu',
+      })
+      setVisibleIds(prev => [...prev, ...res.items.map(e => e.id).filter(id => !prev.includes(id))])
+      setPage(res.page)
+      setTotalItems(res.totalItems)
+      setTotalPages(res.totalPages)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '下一页活动加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const openEvent = async (event: EventItem) => {
+    if (openingId) return
+    setOpeningId(event.id)
+    try {
+      await loadDetailRef.current(event.id)
+      setDetailId(event.id)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '活动详情暂时无法加载')
+    } finally {
+      setOpeningId('')
+    }
+  }
+
+  const loadCalendarRange = useCallback((from: string, to: string) => {
+    setCalendarLoading(true)
+    setCalendarError('')
+    void loadEventsRef.current({ page: 1, perPage: 120, scope: 'calendar', from, to, localFirst: false })
+      .then(res => setCalendarIds(res.items.map(e => e.id)))
+      .catch(e => setCalendarError(e instanceof Error ? e.message : '本月活动加载失败'))
+      .finally(() => setCalendarLoading(false))
+  }, [])
+
+  const closeForm = () => {
+    setFormOpen(false)
+    setEditing(null)
+    if (filter !== 'calendar') retry()
+  }
 
   return (
     <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
@@ -76,7 +194,7 @@ export function EventsPage() {
             {soon.map(({ event, days }) => (
               <button
                 key={event.id}
-                onClick={() => setDetail(event)}
+                onClick={() => { void openEvent(event) }}
                 className="flex items-center gap-2 rounded-full border border-gold/50 bg-card px-3 py-1.5 text-xs text-foreground/85 transition hover:border-primary/60 hover:shadow-card"
               >
                 <span className="max-w-40 truncate">{event.title}</span>
@@ -90,11 +208,11 @@ export function EventsPage() {
         </div>
       )}
 
-      <div className="mb-6 flex justify-center gap-2">
+      <div className="mb-6 flex flex-wrap justify-center gap-2">
         {FILTERS.map(f => (
           <button
             key={f.key}
-            onClick={() => setFilter(f.key)}
+            onClick={() => beginFilter(f.key)}
             className={cn('rounded-full border px-4 py-1.5 text-sm transition', filter === f.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/70 hover:border-primary/40')}
           >
             {f.label}
@@ -113,12 +231,50 @@ export function EventsPage() {
         </div>
       )}
 
+      {openingId && (
+        <p className="mb-4 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <Loader2 size={13} className="animate-spin" />正在读取活动详情…
+        </p>
+      )}
+
       {filter === 'calendar' ? (
-        <EventCalendar events={shown} onOpen={setDetail} />
-      ) : list.length ? (
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {list.map(e => <EventCard key={e.id} event={e} onOpen={setDetail} />)}
+        <>
+          {calendarError && (
+            <div className="mb-4 rounded-md border border-border bg-secondary/40 p-3 text-center text-xs text-muted-foreground">
+              {calendarError}
+            </div>
+          )}
+          {calendarLoading && <p className="mb-3 text-center text-xs text-muted-foreground">正在读取本月活动…</p>}
+          <EventCalendar events={calendarEvents} onOpen={e => { void openEvent(e) }} onRangeChange={loadCalendarRange} />
+        </>
+      ) : error && page === 1 ? (
+        <div className="card-cn mx-auto max-w-md rounded-lg p-8 text-center">
+          <h3 className="font-xing text-2xl text-foreground">活动列表暂时没有加载成功</h3>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{error}</p>
+          <button className="btn-outline mt-5" onClick={retry}><RefreshCw size={14} />重新加载</button>
         </div>
+      ) : loading && page === 1 ? (
+        <div className="card-cn mx-auto max-w-md rounded-lg p-10 text-center text-sm text-muted-foreground">
+          <Loader2 size={20} className="mx-auto mb-3 animate-spin text-primary" />
+          正在加载真实活动…
+        </div>
+      ) : list.length ? (
+        <>
+          <div className="mb-4 flex items-center justify-between text-xs text-muted-foreground">
+            <span>当前分类共 {totalItems} 场 · 每次最多加载 18 场</span>
+            {error && <button className="text-primary" onClick={() => { void loadMore() }}>上一轮加载失败，重试</button>}
+          </div>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {list.map(e => <EventCard key={e.id} event={e} onOpen={x => { void openEvent(x) }} />)}
+          </div>
+          {page < totalPages && (
+            <div className="mt-8 text-center">
+              <button className="btn-outline min-w-40" disabled={loading} onClick={() => { void loadMore() }}>
+                {loading ? <><Loader2 size={14} className="animate-spin" />加载中…</> : '加载更多'}
+              </button>
+            </div>
+          )}
+        </>
       ) : (
         <div className="card-cn mx-auto max-w-md rounded-lg p-10 text-center">
           <h3 className="font-xing text-2xl text-foreground">
@@ -131,7 +287,7 @@ export function EventsPage() {
                 ? '挑一场感兴趣的活动,把缘分从线上带到线下。'
                 : '往下翻翻往期回顾,或干脆由你发起一场新相聚。'}
           </p>
-          <button className="btn-primary mt-6" onClick={() => (filter === 'hosted' ? setFormOpen(true) : setFilter('all'))}>
+          <button className="btn-primary mt-6" onClick={() => (filter === 'hosted' ? setFormOpen(true) : beginFilter('all'))}>
             {filter === 'hosted' ? '发起一场活动' : '看看全部活动'}
           </button>
         </div>
@@ -146,19 +302,21 @@ export function EventsPage() {
           </div>
           <p className="mb-6 text-center text-[11px] text-muted-foreground">已落幕的相聚,也曾促成不少佳缘。</p>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {pastList.map(e => (
-              <EventCard key={e.id} event={e} onOpen={setDetail} album />
-            ))}
+            {pastList.map(e => <EventCard key={e.id} event={e} onOpen={x => { void openEvent(x) }} album />)}
           </div>
         </section>
       )}
 
-      <EventDetail event={detail} onClose={() => setDetail(null)} onEdit={e => { setDetail(null); setFormOpen(true); setEditing(e) }} />
+      <EventDetail
+        event={detail}
+        onClose={() => setDetailId('')}
+        onEdit={e => { setDetailId(''); setFormOpen(true); setEditing(e) }}
+      />
       {formOpen && (
         <EventForm
           open
           initial={editing}
-          onClose={() => { setFormOpen(false); setEditing(null) }}
+          onClose={closeForm}
         />
       )}
     </div>

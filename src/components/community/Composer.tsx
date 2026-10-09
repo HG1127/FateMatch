@@ -1,22 +1,32 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Feather, ImagePlus, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { readImageFile, riskWord, TOPICS, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import { Modal, Tag } from '@/components/ui'
+import { readImageFile } from '@/lib/image-utils'
+import { riskWord, TOPICS, TOPIC_GUIDE } from '@/lib/store-model'
+import { clearSessionDraft, readSessionDraft, saveSessionDraft } from '@/lib/session-drafts'
 
 /** 发帖收敛为弹窗: 文字 + 多图(至多 6 张) + 话题 */
 export function ComposerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { me, publish, composerDraft, setComposerDraft } = useStore()
-  const [text, setText] = useState('')
-  const [topic, setTopic] = useState(TOPICS[0])
+  const { me, publish, composerDraft, composerDraftTopic, setComposerDraft } = useStore()
+  const owner = me?.id ?? ''
+  const [text, setText] = useState(() => readSessionDraft('post', owner)?.text ?? '')
+  const [topic, setTopic] = useState(() => {
+    const draftTopic = readSessionDraft('post', owner)?.topic
+    return draftTopic && TOPICS.includes(draftTopic) ? draftTopic : TOPICS[0]
+  })
   const [images, setImages] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { saveSessionDraft('post', owner, '', { text, topic }) }, [owner, text, topic])
 
   // 从活动回顾等入口带来的预填文案: 草稿变化时在渲染期直接同步(React 官方「渲染期调整 state」模式)
   const [seenDraft, setSeenDraft] = useState('')
   if (open && composerDraft && composerDraft !== seenDraft) {
     setSeenDraft(composerDraft)
     setText(composerDraft)
+    if (TOPICS.includes(composerDraftTopic)) setTopic(composerDraftTopic)
   }
 
   if (!me) return null
@@ -39,7 +49,7 @@ export function ComposerModal({ open, onClose }: { open: boolean; onClose: () =>
         continue
       }
       try {
-        const url = await readImageFile(f, 600)
+        const url = await readImageFile(f, 600, 'post')
         setImages(p => (p.length >= 6 ? p : [...p, url]))
       } catch {
         toast.error('有图片读取失败,已跳过')
@@ -47,31 +57,40 @@ export function ComposerModal({ open, onClose }: { open: boolean; onClose: () =>
     }
   }
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return
     if (text.trim().length < 5) {
       toast.error('多写几句吧,至少 5 个字')
       return
     }
-    publish(text.trim(), images, topic)
-    setText('')
-    setImages([])
-    toast.success('分享已发布,静候知音')
-    if (riskWord(text)) {
-      toast.warning('温馨提醒:涉及钱财、投资等内容请遵守真诚交友公约,谨防误导他人。')
+    setSubmitting(true)
+    try {
+      await publish(text.trim(), images, topic)
+      clearSessionDraft('post', owner)
+      setText('')
+      setImages([])
+      toast.success('分享已确认发布')
+      if (riskWord(text)) {
+        toast.warning('温馨提醒:涉及钱财、投资等内容请遵守真诚交友公约,谨防误导他人。')
+      }
+      close()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '分享未发布成功,内容已为你保留')
+    } finally {
+      setSubmitting(false)
     }
-    close()
   }
 
   return (
-    <Modal open={open} onClose={close} wide>
+    <Modal open={open} onClose={() => !submitting && close()} wide>
       <div className="space-y-4 p-5 md:p-6">
         <h3 className="flex items-center gap-2 font-xing text-2xl text-foreground">
           <Feather size={18} className="text-gold" />
-          写一段分享
+          发一篇能帮助别人认识你的分享
         </h3>
         <textarea
           className="input-cn min-h-28 resize-y"
-          placeholder="分享此刻的生活与心境,让同频的人看见你…"
+          placeholder={TOPIC_GUIDE[topic]}
           value={text}
           onChange={e => setText(e.target.value)}
           maxLength={5000}
@@ -108,7 +127,7 @@ export function ComposerModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         </div>
         <div>
-          <label className="mb-1.5 block text-xs tracking-widest text-muted-foreground">选择话题</label>
+          <label className="mb-1.5 block text-xs tracking-widest text-muted-foreground">这篇内容帮助别人了解什么</label>
           <div className="flex flex-wrap gap-1.5">
             {TOPICS.map(t => (
               <Tag key={t} active={topic === t} onClick={() => setTopic(t)}>
@@ -117,9 +136,11 @@ export function ComposerModal({ open, onClose }: { open: boolean; onClose: () =>
             ))}
           </div>
         </div>
+        <div className="rounded-md bg-secondary/40 px-3 py-2 text-xs leading-5 text-muted-foreground">{TOPIC_GUIDE[topic]}</div>
+        <p className="text-[11px] text-muted-foreground">关闭后文字草稿仅在当前浏览器标签页暂存；图片不会保存到草稿，重新进入需重新选择。</p>
         <div className="grid grid-cols-2 gap-3 pt-1">
-          <button className="btn-outline !py-2.5" onClick={close}>先不了</button>
-          <button className="btn-primary !py-2.5" onClick={submit}>发布</button>
+          <button className="btn-outline !py-2.5" disabled={submitting} onClick={close}>保留草稿</button>
+          <button className="btn-primary !py-2.5 disabled:opacity-50" disabled={submitting} onClick={() => void submit()}>{submitting ? '发布中…' : '发布'}</button>
         </div>
       </div>
     </Modal>

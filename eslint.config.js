@@ -6,7 +6,18 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores([
+    'dist',
+    'node_modules',
+    'backups',
+    'test-results',
+    'spark-output',
+    'pocketbase/pb_data',
+    'pocketbase/pb_hooks',
+    'vibex-local',
+    '.vibex',
+    '.cursor',
+  ]),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

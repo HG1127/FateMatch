@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ImagePlus, Send, Sparkles, X } from 'lucide-react'
+import { ImagePlus, Loader2, RefreshCw, Send, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { readImageFile, riskWord, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
-import { fmtTime } from '@/lib/utils'
-import { cn } from '@/lib/utils'
+import type { RelationshipFeedbackOutcome } from '@/lib/store-types'
+import { cn, fmtTime } from '@/lib/utils'
+import { readImageFile } from '@/lib/image-utils'
+import { riskWord } from '@/lib/store-model'
 import { EmojiRow, Lightbox } from '@/components/ui'
+import { clearSessionDraft, readSessionDraft, saveSessionDraft } from '@/lib/session-drafts'
 
 const QUICK_PHRASES = [
   '你周末一般怎么过?',
@@ -25,42 +28,118 @@ const dayLabel = (at: number) => {
 }
 
 export function ChatPanel({ user }: { user: User }) {
-  const { me, chatWith, sendChat, icebreakerFor, markRead, recallMsg, pollChats } = useStore()
-  const [text, setText] = useState('')
+  const { me, chatWith, loadChat, sendChat, icebreakerFor, markRead, recallMsg, pollChats, loadRelationshipFeedback, setRelationshipFeedback } = useStore()
+  const draftOwner = me?.id ?? ''
+  const [text, setText] = useState(() => readSessionDraft('chat', draftOwner, user.id)?.text ?? '')
   const [pendingImgs, setPendingImgs] = useState<string[]>([])
   const [lb, setLb] = useState('')
+  const [sending, setSending] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
+  const [feedbackEligible, setFeedbackEligible] = useState(false)
+  const [feedback, setFeedback] = useState<RelationshipFeedbackOutcome | null>(null)
+  const [feedbackBusy, setFeedbackBusy] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
   const imgRef = useRef<HTMLInputElement>(null)
+  const loadChatRef = useRef(loadChat)
+  const markReadRef = useRef(markRead)
+  const pollChatsRef = useRef(pollChats)
+  const loadFeedbackRef = useRef(loadRelationshipFeedback)
+  const setFeedbackRef = useRef(setRelationshipFeedback)
+  useEffect(() => { loadChatRef.current = loadChat }, [loadChat])
+  useEffect(() => { markReadRef.current = markRead }, [markRead])
+  useEffect(() => { pollChatsRef.current = pollChats }, [pollChats])
+  useEffect(() => { loadFeedbackRef.current = loadRelationshipFeedback }, [loadRelationshipFeedback])
+  useEffect(() => { setFeedbackRef.current = setRelationshipFeedback }, [setRelationshipFeedback])
   const msgs = chatWith(user.id)
+  useEffect(() => { saveSessionDraft('chat', draftOwner, user.id, { text }) }, [draftOwner, user.id, text])
 
   useEffect(() => {
-    markRead(user.id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.id, msgs.length])
+    let alive = true
+    void Promise.resolve().then(async () => {
+      if (!alive) return
+      setLoading(true)
+      setLoadError('')
+      setFeedbackEligible(false)
+      setFeedback(null)
+      try {
+        await loadChatRef.current(user.id)
+        if (!alive) return
+        await markReadRef.current(user.id)
+      } catch (e) {
+        if (alive) setLoadError(e instanceof Error ? e.message : '聊天记录加载失败')
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })
+    return () => { alive = false }
+  }, [user.id, retryKey])
+
+  // 首次发送/收到真实消息后立即复核反馈资格，不要求退出或刷新会话。
+  // 只在消息条数变化及聊天首次加载完成后读取本人状态，不增加登录首包。
+  useEffect(() => {
+    if (loading || loadError || !msgs.length) return
+    let alive = true
+    void loadFeedbackRef.current(user.id)
+      .then(state => {
+        if (!alive || !state.available) return
+        setFeedbackEligible(state.eligible)
+        setFeedback(state.outcome)
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [user.id, msgs.length, loading, loadError])
 
   useEffect(() => {
     boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' })
   }, [msgs.length])
 
-  // 准实时收信(v1.9): 会话打开期间每 12 秒拉取服务端会话, 合并对方新消息
+  // 准实时收信：只刷新当前会话；成功取得新消息后才更新已读状态。
   useEffect(() => {
     const t = setInterval(() => {
-      void pollChats()
+      void pollChatsRef.current(user.id)
+        .then(() => markReadRef.current(user.id))
+        .catch(() => {})
     }, 12_000)
     return () => clearInterval(t)
-  }, [pollChats])
+  }, [user.id])
 
   if (!me) return null
 
-  const send = () => {
+  const send = async () => {
     const t = text.trim()
-    if (!t && !pendingImgs.length) return
-    const hadImage = pendingImgs.length > 0
-    sendChat(user.id, t, hadImage ? pendingImgs : undefined)
-    setText('')
-    setPendingImgs([])
-    if (riskWord(t)) {
-      toast.warning('温馨提醒:涉及钱财、验证码等内容请谨慎甄别,随缘网绝不会向你索要财物或密码。')
+    if ((!t && !pendingImgs.length) || sending) return
+    const imgs = pendingImgs.length ? [...pendingImgs] : undefined
+    setSending(true)
+    try {
+      await sendChat(user.id, t, imgs)
+      clearSessionDraft('chat', draftOwner, user.id)
+      setText('')
+      setPendingImgs([])
+      if (riskWord(t)) {
+        toast.warning('温馨提醒:涉及钱财、验证码等内容请谨慎甄别,随缘网绝不会向你索要财物或密码。')
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '消息未发送,内容已为你保留')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const saveFeedback = async (outcome: RelationshipFeedbackOutcome | null) => {
+    if (feedbackBusy) return
+    setFeedbackBusy(true)
+    try {
+      const state = await setFeedbackRef.current(user.id, outcome)
+      if (!state.available) throw new Error('反馈功能暂未就绪')
+      setFeedbackEligible(state.eligible)
+      setFeedback(state.outcome)
+      toast.success(outcome === null ? '已撤回关系反馈' : '反馈已保存，仅你自己可见')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '反馈未保存，请重试')
+    } finally {
+      setFeedbackBusy(false)
     }
   }
 
@@ -71,7 +150,7 @@ export function ChatPanel({ user }: { user: User }) {
       return
     }
     try {
-      const url = await readImageFile(file, 400)
+      const url = await readImageFile(file, 400, 'chat')
       setPendingImgs(prev => (prev.length >= 9 ? prev : [...prev, url]))
     } catch {
       toast.error('图片读取失败,请换一张')
@@ -80,13 +159,26 @@ export function ChatPanel({ user }: { user: User }) {
 
   return (
     <>
-      <div className="flex h-[540px] flex-col">
+      <div className="flex h-[min(72svh,540px)] min-h-[360px] flex-col sm:h-[540px]">
       <div ref={boxRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-        {msgs.length === 0 && (
+        {loading && msgs.length === 0 ? (
+          <div className="pt-16 text-center text-xs text-muted-foreground">
+            <Loader2 size={18} className="mx-auto mb-2 animate-spin text-primary" />
+            正在加载这段真实会话…
+          </div>
+        ) : loadError && msgs.length === 0 ? (
+          <div className="pt-16 text-center">
+            <p className="text-xs text-muted-foreground">{loadError}</p>
+            <button className="btn-outline mt-3 !px-3 !py-1.5 text-xs" onClick={() => setRetryKey(v => v + 1)}>
+              <RefreshCw size={13} />重新加载
+            </button>
+            <p className="mt-2 text-[10px] text-muted-foreground">加载成功前不会清除未读状态。</p>
+          </div>
+        ) : msgs.length === 0 ? (
           <p className="pt-16 text-center text-xs text-muted-foreground">
             佳音已结,从一句「幸会」开始吧。
           </p>
-        )}
+        ) : null}
         {msgs.map((m, i) => {
           const prev = msgs[i - 1]
           const showDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString()
@@ -145,7 +237,9 @@ export function ChatPanel({ user }: { user: User }) {
                               toast('逾时两分钟,此句收不回了')
                               return
                             }
-                            recallMsg(user.id, m.id)
+                            void recallMsg(user.id, m.id)
+                              .then(() => toast.success('消息已撤回'))
+                              .catch(e => toast.error(e instanceof Error ? e.message : '撤回未成功,请重试'))
                           }}
                         >
                           撤回
@@ -159,12 +253,37 @@ export function ChatPanel({ user }: { user: User }) {
           )
         })}
       </div>
+      {feedbackEligible && msgs.length > 0 && (
+        <div className="border-t border-border bg-secondary/25 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-auto text-[11px] text-muted-foreground">这段关系现在更像——</span>
+            <button
+              className={cn('rounded-full border px-3 py-1 text-[11px] transition', feedback === 'continue' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-foreground/75 hover:border-primary/40')}
+              disabled={feedbackBusy}
+              onClick={() => void saveFeedback('continue')}
+            >
+              愿意继续认识
+            </button>
+            <button
+              className={cn('rounded-full border px-3 py-1 text-[11px] transition', feedback === 'pause' ? 'border-gold bg-gold/15 text-gold' : 'border-border bg-card text-foreground/75 hover:border-gold/40')}
+              disabled={feedbackBusy}
+              onClick={() => void saveFeedback('pause')}
+            >
+              先暂停认识
+            </button>
+            {feedback && (
+              <button className="text-[10px] text-muted-foreground underline-offset-2 hover:underline" disabled={feedbackBusy} onClick={() => void saveFeedback(null)}>撤回</button>
+            )}
+          </div>
+          <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">只作为你自己的试点反馈，不通知对方，也不会自动改变互配、聊天或推荐。</p>
+        </div>
+      )}
       <div className="flex gap-1.5 overflow-x-auto border-t border-border px-3 pt-2">
         {QUICK_PHRASES.map(q => (
           <button
             key={q}
             className="shrink-0 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground transition hover:border-primary/50 hover:text-primary"
-            onClick={() => setText(q)}
+            onClick={() => setText(prev => prev.trim() ? `${prev.trimEnd()}\n${q}`.slice(0, 2000) : q)}
           >
             {q}
           </button>
@@ -190,11 +309,11 @@ export function ChatPanel({ user }: { user: User }) {
           <span className="cjk-latin mt-12 text-[10px] text-muted-foreground">{pendingImgs.length}/9</span>
         </div>
       )}
-      <div className="flex gap-2 p-3">
+      <div className="flex flex-wrap gap-2 p-3">
         <button
           className="btn-outline shrink-0 !px-3 transition active:scale-95"
           title="破冰助手:按共同兴趣生成开场白"
-          onClick={() => setText(icebreakerFor(user))}
+          onClick={() => setText(prev => prev.trim() ? `${prev.trimEnd()}\n${icebreakerFor(user)}`.slice(0, 2000) : icebreakerFor(user))}
         >
           <Sparkles size={15} />
           破冰
@@ -216,22 +335,30 @@ export function ChatPanel({ user }: { user: User }) {
             e.target.value = ''
           }}
         />
-        <input
-          className="input-cn"
+        <textarea
+          aria-label="聊天消息草稿"
+          className="input-cn min-w-0 flex-[1_1_48%] resize-y"
+          rows={2}
           placeholder="写一句问候…"
           value={text}
           onChange={e => setText(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && send()}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              void send()
+            }
+          }}
           maxLength={2000}
         />
         <button
           className="btn-primary shrink-0 !px-4 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-          onClick={send}
-          disabled={!text.trim() && !pendingImgs.length}
+          onClick={() => void send()}
+          disabled={sending || (!text.trim() && !pendingImgs.length)}
           aria-label="发送"
         >
           <Send size={16} />
         </button>
+      <p className="px-3 pb-2 text-[11px] text-muted-foreground">Enter 发送 · Shift+Enter 换行 · 文字草稿只在此浏览器标签页暂存</p>
       </div>
       </div>
       <Lightbox src={lb} onClose={() => setLb('')} />

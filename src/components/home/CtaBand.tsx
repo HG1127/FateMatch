@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 
 export function CtaBand() {
   const { me } = useStore()

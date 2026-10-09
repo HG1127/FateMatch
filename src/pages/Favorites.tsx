@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Bookmark, FolderPlus, MessageCircleHeart, PencilLine, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { ageOf, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { EventItem, User } from '@/lib/store'
+import { ageOf } from '@/lib/store-model'
 import { regionOf } from '@/lib/region'
 import { PostTile } from '@/components/community/PostTile'
 import { PostDialog } from '@/components/community/PostDialog'
@@ -22,7 +23,7 @@ const TABS = [
 type TabKey = (typeof TABS)[number]['key']
 
 export function FavoritesPage() {
-  const { users, posts, events, favs, matchScore, me, favGroups, favGroupOf, addFavGroup, removeFavGroup, renameFavGroup, setFavGroup, sendChat, icebreakerFor } = useStore()
+  const { users, posts, events, favs, matchScore, me, favGroups, favGroupOf, addFavGroup, removeFavGroup, renameFavGroup, setFavGroup, isMutual, loadCommunityPosts, loadEventsPage, loadEventDetail } = useStore()
   const [tab, setTab] = useState<TabKey>('users')
   const [profile, setProfile] = useState<User | null>(null)
   const [event, setEvent] = useState<EventItem | null>(null)
@@ -32,13 +33,50 @@ export function FavoritesPage() {
   const [newGroup, setNewGroup] = useState('')
   const [editingGroup, setEditingGroup] = useState('')
   const [renameVal, setRenameVal] = useState('')
+  const [groupBusy, setGroupBusy] = useState(false)
+  const [loadedPostKey, setLoadedPostKey] = useState('')
+  const [loadedEventKey, setLoadedEventKey] = useState('')
+  const loadPostsRef = useRef(loadCommunityPosts)
+  const loadEventsRef = useRef(loadEventsPage)
+  const loadEventDetailRef = useRef(loadEventDetail)
+  useEffect(() => { loadPostsRef.current = loadCommunityPosts }, [loadCommunityPosts])
+  useEffect(() => { loadEventsRef.current = loadEventsPage }, [loadEventsPage])
+  useEffect(() => { loadEventDetailRef.current = loadEventDetail }, [loadEventDetail])
+  const favPostKey = favs.posts.join('|')
+  const favEventKey = favs.events.join('|')
+  useEffect(() => {
+    const ids = favPostKey ? favPostKey.split('|').filter(Boolean) : []
+    if (!ids.length) return
+    const chunks = Array.from({ length: Math.ceil(ids.length / 36) }, (_, i) => ids.slice(i * 36, (i + 1) * 36))
+    void Promise.all(chunks.map(chunk => loadPostsRef.current({ page: 1, perPage: chunk.length, ids: chunk })))
+      .catch(() => toast.error('部分收藏帖文暂时没有加载成功'))
+      .finally(() => setLoadedPostKey(favPostKey))
+  }, [favPostKey])
+  useEffect(() => {
+    const ids = favEventKey ? favEventKey.split('|').filter(Boolean) : []
+    if (!ids.length) return
+    const chunks = Array.from({ length: Math.ceil(ids.length / 36) }, (_, i) => ids.slice(i * 36, (i + 1) * 36))
+    void Promise.all(chunks.map(chunk => loadEventsRef.current({ page: 1, perPage: chunk.length, ids: chunk, localFirst: false })))
+      .catch(() => toast.error('部分收藏活动暂时没有加载成功'))
+      .finally(() => setLoadedEventKey(favEventKey))
+  }, [favEventKey])
+
+  const openEvent = async (item: EventItem) => {
+    try {
+      setEvent(await loadEventDetailRef.current(item.id))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '活动详情暂时无法加载')
+    }
+  }
 
   if (!me) return null
 
   const favUsers = favs.users.map(id => users.find(u => u.id === id)).filter((u): u is User => !!u)
   const favPosts = posts.filter(p => favs.posts.includes(p.id))
   const favEvents = favs.events.map(id => events.find(e => e.id === id)).filter((e): e is EventItem => !!e)
-  const counts: Record<TabKey, number> = { users: favUsers.length, posts: favPosts.length, events: favEvents.length }
+  const postHydrating = !!favPostKey && loadedPostKey !== favPostKey
+  const eventHydrating = !!favEventKey && loadedEventKey !== favEventKey
+  const counts: Record<TabKey, number> = { users: favs.users.length, posts: favs.posts.length, events: favs.events.length }
 
   const shownUsers = favUsers.filter(u => {
     const g = favGroupOf(u.id)
@@ -47,26 +85,36 @@ export function FavoritesPage() {
     return g === groupFilter
   })
 
-  const submitNewGroup = () => {
-    const err = addFavGroup(newGroup)
-    if (err) {
-      toast.error(err)
-      return
+  const submitNewGroup = async () => {
+    if (groupBusy) return
+    setGroupBusy(true)
+    try {
+      const err = await addFavGroup(newGroup)
+      if (err) return toast.error(err)
+      setGroupFilter(newGroup.trim())
+      setNewGroup('')
+      toast.success('分组已建好,把心动的人收进来吧')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '分组未保存,请重试')
+    } finally {
+      setGroupBusy(false)
     }
-    setGroupFilter(newGroup.trim())
-    setNewGroup('')
-    toast.success('分组已建好,把心动的人收进来吧')
   }
 
-  const commitRename = (oldName: string) => {
-    const err = renameFavGroup(oldName, renameVal)
-    if (err) {
-      toast.error(err)
-      return
+  const commitRename = async (oldName: string) => {
+    if (groupBusy) return
+    setGroupBusy(true)
+    try {
+      const err = await renameFavGroup(oldName, renameVal)
+      if (err) return toast.error(err)
+      if (groupFilter === oldName) setGroupFilter(renameVal.trim())
+      setEditingGroup('')
+      toast.success('分组已改名,组内收藏随迁')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '分组改名未保存,请重试')
+    } finally {
+      setGroupBusy(false)
     }
-    if (groupFilter === oldName) setGroupFilter(renameVal.trim())
-    setEditingGroup('')
-    toast.success('分组已改名,组内收藏随迁')
   }
 
   return (
@@ -115,11 +163,11 @@ export function FavoritesPage() {
                       autoFocus
                       onChange={e => setRenameVal(e.target.value)}
                       onKeyDown={e => {
-                        if (e.key === 'Enter') commitRename(g)
+                        if (e.key === 'Enter') void commitRename(g)
                         if (e.key === 'Escape') setEditingGroup('')
                       }}
                     />
-                    <button className="btn-primary !px-2 !py-0.5 text-[10px]" onClick={() => commitRename(g)}>改名</button>
+                    <button disabled={groupBusy} className="btn-primary !px-2 !py-0.5 text-[10px]" onClick={() => { void commitRename(g) }}>改名</button>
                   </span>
                 ) : (
                   <>
@@ -144,10 +192,17 @@ export function FavoritesPage() {
                         <button
                           title="删除该分组"
                           className="bg-muted/60 px-1.5 py-1 text-muted-foreground transition hover:text-primary"
+                          disabled={groupBusy}
                           onClick={() => {
-                            removeFavGroup(g)
-                            if (groupFilter === g) setGroupFilter('')
-                            toast('分组已删,组内收藏已回到未分组')
+                            if (groupBusy) return
+                            setGroupBusy(true)
+                            void removeFavGroup(g)
+                              .then(() => {
+                                if (groupFilter === g) setGroupFilter('')
+                                toast.success('分组已删,组内收藏已回到未分组')
+                              })
+                              .catch(e => toast.error(e instanceof Error ? e.message : '分组删除未保存,请重试'))
+                              .finally(() => setGroupBusy(false))
                           }}
                         >
                           <X size={11} />
@@ -166,9 +221,9 @@ export function FavoritesPage() {
                   value={newGroup}
                   maxLength={6}
                   onChange={e => setNewGroup(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && submitNewGroup()}
+                  onKeyDown={e => { if (e.key === 'Enter') void submitNewGroup() }}
                 />
-                <button className="btn-primary !px-2.5 !py-1 text-xs" onClick={submitNewGroup}>建好</button>
+                <button disabled={groupBusy} className="btn-primary !px-2.5 !py-1 text-xs" onClick={() => { void submitNewGroup() }}>建好</button>
                 <button className="btn-ghost !px-2 !py-1 text-xs text-muted-foreground" onClick={() => setManageOpen(false)}>完成</button>
               </span>
             ) : (
@@ -186,7 +241,7 @@ export function FavoritesPage() {
                   <img src={u.photos[0]} alt={u.nickname} className="h-14 w-14 rounded-full border border-gold/40 object-cover" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-xing text-xl text-foreground">
-                      {u.nickname} <span className="cjk-latin text-sm text-gold">{ageOf(u.birthDate)}</span>
+                      {u.nickname} {ageOf(u.birthDate) > 0 && <span className="cjk-latin text-sm text-gold">{ageOf(u.birthDate)}</span>}
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{regionOf(u)} · {u.job}</p>
                     <div className="mt-1"><VerifyBadges v={u.verification} /></div>
@@ -199,9 +254,15 @@ export function FavoritesPage() {
                   <select
                     className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
                     value={favGroupOf(u.id)}
+                    disabled={groupBusy}
                     onChange={e => {
-                      setFavGroup(u.id, e.target.value)
-                      toast(e.target.value ? `已移入「${e.target.value}」` : '已移回未分组')
+                      const group = e.target.value
+                      if (groupBusy) return
+                      setGroupBusy(true)
+                      void setFavGroup(u.id, group)
+                        .then(() => toast.success(group ? `已移入「${group}」` : '已移回未分组'))
+                        .catch(err => toast.error(err instanceof Error ? err.message : '分组归类未保存,请重试'))
+                        .finally(() => setGroupBusy(false))
                     }}
                   >
                     <option value="">未分组</option>
@@ -209,16 +270,18 @@ export function FavoritesPage() {
                       <option key={g} value={g}>{g}</option>
                     ))}
                   </select>
-                  <button
-                    className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/40 px-2.5 py-1 text-[11px] text-primary transition hover:bg-primary hover:text-primary-foreground"
-                    onClick={() => {
-                      sendChat(u.id, icebreakerFor(u))
-                      toast.success('招呼已送达,去佳音里等回音吧')
-                    }}
-                  >
-                    <MessageCircleHeart size={12} />
-                    打招呼
-                  </button>
+                  {isMutual(u.id) ? (
+                    <Link
+                      to={`/matches?with=${u.id}`}
+                      className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/40 px-2.5 py-1 text-[11px] text-primary transition hover:bg-primary hover:text-primary-foreground"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <MessageCircleHeart size={12} />
+                      去佳音
+                    </Link>
+                  ) : (
+                    <span className="ml-auto text-[10px] text-muted-foreground">互道有意后可聊</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -235,7 +298,9 @@ export function FavoritesPage() {
       )}
 
       {tab === 'posts' && (
-        favPosts.length ? (
+        postHydrating && favs.posts.length && !favPosts.length ? (
+          <p className="rounded-md bg-secondary/40 p-8 text-center text-sm text-muted-foreground">正在读取收藏帖文…</p>
+        ) : favPosts.length ? (
           <div className="columns-1 gap-5 sm:columns-2 lg:columns-3">
             {favPosts.map(p => <PostTile key={p.id} post={p} onOpen={x => setPostDetailId(x.id)} onProfile={setProfile} />)}
           </div>
@@ -245,9 +310,11 @@ export function FavoritesPage() {
       )}
 
       {tab === 'events' && (
-        favEvents.length ? (
+        eventHydrating && favs.events.length && !favEvents.length ? (
+          <p className="rounded-md bg-secondary/40 p-8 text-center text-sm text-muted-foreground">正在读取收藏活动…</p>
+        ) : favEvents.length ? (
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {favEvents.map(e => <EventCard key={e.id} event={e} onOpen={setEvent} />)}
+            {favEvents.map(e => <EventCard key={e.id} event={e} onOpen={x => { void openEvent(x) }} />)}
           </div>
         ) : (
           <Empty text="还没有收藏的活动" sub="收藏感兴趣的活动,报名前先留个念想。" to="/events" toLabel="去看看活动" />

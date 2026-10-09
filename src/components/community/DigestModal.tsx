@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Share2, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { Post, User, WeeklyDigest } from '@/lib/store'
 import { PostTile } from '@/components/community/PostTile'
 import { PostDialog } from '@/components/community/PostDialog'
@@ -25,7 +25,7 @@ export function DigestModal({ digest, posts, onClose }: { digest: WeeklyDigest |
   }
   // 翻开合集即记一笔, 供新人任务「翻阅一辑每周精选」(markTour 幂等, 重复调用无副作用)
   useEffect(() => {
-    if (digest) markTour('digest')
+    if (digest) void markTour('digest').catch(() => {})
   }, [digest, markTour])
   // 多封面自动轮播, 鼠标悬停时暂停
   useEffect(() => {

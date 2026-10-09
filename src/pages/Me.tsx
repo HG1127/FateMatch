@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BadgeCheck, Ban, Download, Eye, EyeOff, KeyRound, MapPin, MessageCircleHeart, Sparkles, Trophy } from 'lucide-react'
+import { BadgeCheck, Ban, Download, Eye, EyeOff, KeyRound, MapPin, MessageCircleHeart, ShieldAlert, Sparkles, Trash2, Trophy } from 'lucide-react'
 import { toast } from 'sonner'
-import { ageOf, completeness, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
+import { ageOf, completeness, isProfileReadyForMatching } from '@/lib/store-model'
 import { regionOf } from '@/lib/region'
 import { changeAccountPassword } from '@/lib/repo'
-import { logoutLocalAccount } from '@/lib/localAuth'
+import { deleteLocalAccount, logoutLocalAccount } from '@/lib/localAuth'
 import { yuanLevel } from '@/lib/badges'
 import { VerifyBadges, LevelSeal, AvatarFrame, NickName } from '@/components/ui'
 import { PhotoManager } from '@/components/me/PhotoManager'
@@ -17,7 +18,7 @@ import { fmtTime, cn } from '@/lib/utils'
 
 export function MePage() {
   const store = useStore()
-  const { me, account, likesOf, mutuals, visitorsOf, sendChat, update, favs, favGroups, users, blocks, toggleBlock, visits } = store
+  const { me, account, likesOf, mutuals, visitorsOf, isMutual, saveProfile, favs, favGroups, users, blocks, toggleBlock, visits, reports, appealReport, loadMeHistory } = store
   const [profile, setProfile] = useState<User | null>(null)
   const [allVisitors, setAllVisitors] = useState(false)
   const [pwdOpen, setPwdOpen] = useState(false)
@@ -25,12 +26,42 @@ export function MePage() {
   const [newPwd, setNewPwd] = useState('')
   const [newPwd2, setNewPwd2] = useState('')
   const [pwdBusy, setPwdBusy] = useState(false)
+  const [privacyBusy, setPrivacyBusy] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [appealFor, setAppealFor] = useState('')
+  const [appealNote, setAppealNote] = useState('')
+  const [appealBusy, setAppealBusy] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState('')
+  const [historyRetry, setHistoryRetry] = useState(0)
+  const loadMeHistoryRef = useRef(loadMeHistory)
+  useEffect(() => { loadMeHistoryRef.current = loadMeHistory }, [loadMeHistory])
+  const meId = me?.id ?? ''
+  useEffect(() => {
+    if (!meId) return
+    let alive = true
+    void Promise.resolve().then(async () => {
+      if (!alive) return
+      setHistoryLoading(true)
+      setHistoryError('')
+      try {
+        await loadMeHistoryRef.current()
+      } catch (e) {
+        if (alive) setHistoryError(e instanceof Error ? e.message : '私有记录加载失败')
+      } finally {
+        if (alive) setHistoryLoading(false)
+      }
+    })
+    return () => { alive = false }
+  }, [meId, historyRetry])
   if (!me) return null
   const lv = yuanLevel(store, me)
   const done = Object.values(me.verification).filter(Boolean).length
   const visitors = visitorsOf(me.id)
   const stealth = !!me.stealth
   const visitedByMe = new Set(Object.entries(visits).filter(([, l]) => l.some(v => v.id === me.id)).map(([k]) => k))
+  const myReports = reports.filter(r => r.by === me.id).sort((a, b) => b.at - a.at)
 
   return (
     <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
@@ -39,6 +70,17 @@ export function MePage() {
         <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">打理自己的缘</h1>
       </div>
 
+      {!isProfileReadyForMatching(me) && <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gold/50 bg-gold/10 p-4"><div><p className="font-semibold text-foreground">只需确认四项必要资料，即可进入真人推荐</p><p className="mt-1 text-xs text-muted-foreground">性别、希望认识的对象、出生日期、城市；兴趣和职业都可以日后补充。</p></div><a className="btn-primary" href="#profile-editor">立即完善</a></div>}
+      {historyLoading && (
+        <p className="mb-5 rounded-md border border-border bg-secondary/40 px-4 py-3 text-center text-xs text-muted-foreground">正在读取你的访客记录与安全反馈…</p>
+      )}
+      {historyError && (
+        <div className="mb-5 flex flex-wrap items-center justify-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-foreground">
+          <span>{historyError}</span>
+          <button className="btn-outline !px-3 !py-1.5 text-xs" onClick={() => setHistoryRetry(v => v + 1)}>重新加载</button>
+        </div>
+      )}
+
       <div className="grid gap-8 lg:grid-cols-[320px_1fr]">
         <div className="space-y-6">
           <div className="card-cn overflow-hidden rounded-lg">
@@ -46,7 +88,7 @@ export function MePage() {
             <div className="space-y-2 p-4">
               <p className="font-xing text-2xl text-foreground">
                 <NickName user={me} />
-                <span className="cjk-latin ml-2 text-sm text-gold">{ageOf(me.birthDate)}</span>
+                {ageOf(me.birthDate) > 0 && <span className="cjk-latin ml-2 text-sm text-gold">{ageOf(me.birthDate)}</span>}
                 <LevelSeal user={me} className="ml-2 align-middle" />
               </p>
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -88,7 +130,7 @@ export function MePage() {
               <div className="card-cn rounded-lg p-4 text-sm">
                 <p className="flex items-center gap-1.5 font-semibold text-foreground">
                   <Sparkles size={15} className="text-gold" />
-                  资料与验证
+                  资料完整度
                   <span className="cjk-latin ml-auto font-xing text-lg text-gold">{c.pct}%</span>
                 </p>
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary">
@@ -118,10 +160,10 @@ export function MePage() {
                 <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
                   <span className="flex items-center gap-1.5 text-xs text-foreground/80">
                     <BadgeCheck size={13} className="text-gold" />
-                    三重验证 <span className="cjk-latin text-gold">{done}/3</span>
+                    核验记录 <span className="cjk-latin text-gold">{done}/3</span>
                   </span>
                   {done < 3 ? (
-                    <Link to="/verify" className="text-xs text-primary transition hover:text-primary/80">去完成 →</Link>
+                    <Link to="/verify" className="text-xs text-primary transition hover:text-primary/80">查看说明 →</Link>
                   ) : (
                     <span className="text-xs text-gold">已完备</span>
                   )}
@@ -151,9 +193,18 @@ export function MePage() {
               <button
                 role="switch"
                 aria-checked={stealth}
-                onClick={() => {
-                  update({ stealth: !stealth })
-                  toast(stealth ? '已关闭隐身,来访将留下足迹' : '已开启隐身,来去不留痕')
+                disabled={privacyBusy}
+                onClick={async () => {
+                  if (privacyBusy) return
+                  setPrivacyBusy(true)
+                  try {
+                    await saveProfile({ stealth: !stealth })
+                    toast.success(stealth ? '已关闭隐身,来访将留下足迹' : '已开启隐身,来去不留痕')
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : '隐私设置未保存,请重试')
+                  } finally {
+                    setPrivacyBusy(false)
+                  }
                 }}
                 className={cn(
                   'ml-auto flex h-5 w-9 items-center rounded-full border p-0.5 transition',
@@ -168,7 +219,8 @@ export function MePage() {
                 ? '隐身中:浏览他人资料不留足迹;作为交换,你也看不到谁看过你。'
                 : '开启后浏览他人资料不留足迹。作为交换,你也将看不到谁看过你。'}
             </p>
-            <div className="mt-3 border-t border-border pt-3">
+          </div>
+            <div className="card-cn rounded-lg p-4 text-sm">
               <p className="flex items-center gap-1.5 font-semibold text-foreground">
                 <KeyRound size={15} className="text-gold" />
                 账号安全
@@ -215,10 +267,47 @@ export function MePage() {
                 <>
                   <p className="mt-2 text-xs leading-relaxed text-muted-foreground">登录邮箱即你的账号;定期换密码更安心。</p>
                   <button className="btn-outline mt-3 w-full !py-2" onClick={() => setPwdOpen(true)}>修改密码</button>
+                  <Link to="/trust#account" className="mt-2 block text-center text-[11px] text-primary transition hover:text-primary/80">查看账号与数据说明 →</Link>
+                  {me.role === 'admin' && <Link to="/admin" className="btn-outline mt-2 w-full !py-2">打开系统设置</Link>}
                 </>
               )}
             </div>
-          </div>
+            <div className="card-cn rounded-lg p-4 text-sm">
+              <p className="flex items-center gap-1.5 font-semibold text-foreground">
+                <Trash2 size={15} className="text-destructive" />
+                注销账号
+              </p>
+              {!deleteOpen ? (
+                <>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">注销会永久删除你的账号、本人资料和本人拥有的内容，并清理收藏、心动、报名、提醒等本人数据。双方共有的历史会话可能为对方侧必要记录而保留。</p>
+                  <button className="btn-outline mt-3 w-full !py-2 text-destructive" onClick={() => setDeleteOpen(true)}>了解并继续注销</button>
+                </>
+              ) : (
+                <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+                  <p className="text-xs leading-relaxed text-foreground/80">这是永久操作，当前版本不提供一键恢复。建议先使用左侧“导出我的资料备份”。确认后服务端完成删除才会退出登录。</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button className="btn-outline !py-2 text-xs" disabled={deleteBusy} onClick={() => setDeleteOpen(false)}>取消</button>
+                    <button
+                      className="rounded-md bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground disabled:opacity-50"
+                      disabled={deleteBusy}
+                      onClick={async () => {
+                        if (deleteBusy) return
+                        setDeleteBusy(true)
+                        try {
+                          await deleteLocalAccount()
+                          toast.success('账号已注销,相关本人数据已按规则清理')
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : '注销未完成,账号仍保留,请重试')
+                          setDeleteBusy(false)
+                        }
+                      }}
+                    >
+                      {deleteBusy ? '正在注销…' : '确认永久注销'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           <div className="card-cn rounded-lg p-4 text-sm">
             <p className="flex items-center gap-1.5 font-semibold text-foreground">
               <Ban size={15} className="text-gold" />
@@ -240,8 +329,11 @@ export function MePage() {
                       <button
                         className="btn-outline shrink-0 !px-2.5 !py-1 text-[11px]"
                         onClick={() => {
-                          toggleBlock(id)
-                          toast('已解除拉黑,缘或可重来')
+                          void toggleBlock(id)
+                            .then(active => {
+                              if (!active) toast.success('已解除拉黑,缘或可重来')
+                            })
+                            .catch(e => toast.error(e instanceof Error ? e.message : '解除拉黑未保存,请重试'))
                         }}
                       >
                         解除
@@ -258,6 +350,73 @@ export function MePage() {
 
         <div className="space-y-8">
           <TaskBoard />
+          <section id="profile-editor" className="card-cn scroll-mt-24 rounded-lg p-5 md:p-6">
+            <h2 className="mb-4 font-xing text-2xl text-foreground">基础资料</h2>
+            <EditForm />
+          </section>
+          <section id="profile-photos" className="card-cn scroll-mt-24 rounded-lg p-5 md:p-6">
+            <h2 className="mb-4 font-xing text-2xl text-foreground">我的照片</h2>
+            <PhotoManager />
+          </section>
+          <section className="card-cn rounded-lg p-5 md:p-6">
+            <h2 className="mb-1 flex items-center gap-2 font-xing text-2xl text-foreground">
+              <ShieldAlert size={18} className="text-gold" />
+              我的安全反馈
+            </h2>
+            <p className="mb-4 text-xs text-muted-foreground">举报是独立工单，不会伪装成聊天消息。这里可查看受理编号、处理状态与申诉结果。</p>
+            <div className="space-y-3">
+              {myReports.map(r => {
+                const target = users.find(u => u.id === r.target)
+                const statusText = r.status !== 'done' ? '待处理' : r.appealStatus === 'open' ? '申诉复核中' : r.appealStatus === 'resolved' ? '申诉已复核' : '已处理'
+                const resultText = r.resolution === 'ban' ? '已核查并采取账号停用措施' : r.resolution === 'dismiss' ? '已核查，未采取账号停用措施' : ''
+                return (
+                  <div key={r.id} className="rounded-md border border-border bg-secondary/35 p-3 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-foreground">{target?.nickname ?? '相关会员'}</span>
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">{statusText}</span>
+                      <span className="cjk-latin ml-auto text-[10px] text-muted-foreground">受理编号 {r.id}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{r.reason} · {new Date(r.at).toLocaleDateString()}</p>
+                    {resultText && <p className="mt-2 rounded bg-card px-2 py-1.5 text-xs text-foreground/80">处理结果：{resultText}</p>}
+                    {r.appealNote && <p className="mt-2 rounded bg-gold/5 px-2 py-1.5 text-xs text-foreground/80">申诉：{r.appealNote}</p>}
+                    {r.status === 'done' && !r.appealStatus && (
+                      appealFor === r.id ? (
+                        <div className="mt-3 space-y-2">
+                          <textarea className="input-cn min-h-20 resize-y" value={appealNote} onChange={e => setAppealNote(e.target.value)} maxLength={1000} placeholder="说明你希望复核的事实或补充证据（5–1000 字）" />
+                          <div className="flex gap-2">
+                            <button className="btn-outline flex-1 !py-2 text-xs" disabled={appealBusy} onClick={() => { setAppealFor(''); setAppealNote('') }}>取消</button>
+                            <button
+                              className="btn-primary flex-1 !py-2 text-xs disabled:opacity-50"
+                              disabled={appealBusy || appealNote.trim().length < 5}
+                              onClick={async () => {
+                                if (appealBusy) return
+                                setAppealBusy(true)
+                                try {
+                                  await appealReport(r.id, appealNote.trim())
+                                  toast.success('申诉已提交复核')
+                                  setAppealFor('')
+                                  setAppealNote('')
+                                } catch (e) {
+                                  toast.error(e instanceof Error ? e.message : '申诉未提交成功，请重试')
+                                } finally {
+                                  setAppealBusy(false)
+                                }
+                              }}
+                            >
+                              {appealBusy ? '提交中…' : '提交申诉'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button className="btn-outline mt-3 !px-3 !py-1.5 text-xs" onClick={() => { setAppealFor(r.id); setAppealNote('') }}>申请复核</button>
+                      )
+                    )}
+                  </div>
+                )
+              })}
+              {!myReports.length && <p className="rounded-md bg-secondary/40 p-5 text-center text-sm text-muted-foreground">你还没有提交过举报。</p>}
+            </div>
+          </section>
           <section className="card-cn rounded-lg p-5 md:p-6">
             <h2 className="mb-1 flex items-center gap-2 font-xing text-2xl text-foreground">
               <Eye size={18} className="text-gold" />
@@ -287,16 +446,14 @@ export function MePage() {
                       )}
                       <p className="text-[11px] text-muted-foreground">{regionOf(user)} · {user.job} · {fmtTime(at)}来过</p>
                     </div>
-                    <button
-                      className="btn-outline shrink-0 !px-3 !py-1.5 text-xs"
-                      onClick={() => {
-                        sendChat(user.id, `你好,看到你来过我的主页,也算一种缘分 ☺`)
-                        toast.success('招呼已送达')
-                      }}
-                    >
-                      <MessageCircleHeart size={13} />
-                      回个招呼
-                    </button>
+                    {isMutual(user.id) ? (
+                      <Link to={`/matches?with=${user.id}`} className="btn-outline shrink-0 !px-3 !py-1.5 text-xs">
+                        <MessageCircleHeart size={13} />
+                        去佳音
+                      </Link>
+                    ) : (
+                      <span className="shrink-0 text-[10px] text-muted-foreground">互道有意后可聊</span>
+                    )}
                   </div>
                 ))}
                 {visitors.length > 8 && (
@@ -314,14 +471,7 @@ export function MePage() {
               </p>
             )}
           </section>
-          <section className="card-cn rounded-lg p-5 md:p-6">
-            <h2 className="mb-4 font-xing text-2xl text-foreground">我的照片</h2>
-            <PhotoManager />
-          </section>
-          <section className="card-cn rounded-lg p-5 md:p-6">
-            <h2 className="mb-4 font-xing text-2xl text-foreground">基础资料</h2>
-            <EditForm />
-          </section>
+
         </div>
       </div>
 

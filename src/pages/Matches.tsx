@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Ban, Flag, MessageSquarePlus, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
 import { regionOf } from '@/lib/region'
 import { ChatPanel } from '@/components/matches/ChatPanel'
@@ -13,17 +13,27 @@ import { AvatarFrame, NickName } from '@/components/ui'
 import { cn, fmtTime } from '@/lib/utils'
 
 export function MatchesPage() {
-  const { conversations, isMutual, me, users, unread, toggleBlock, matchScore } = useStore()
+  const { conversations, isMutual, me, users, unread, toggleBlock, matchScore, match } = useStore()
   const list = conversations()
   const [searchParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState(searchParams.get('with') ?? '')
+  const linkedId = searchParams.get('with') ?? ''
+  const [lastLinkedId, setLastLinkedId] = useState(linkedId)
+  if (linkedId !== lastLinkedId) {
+    setLastLinkedId(linkedId)
+    if (linkedId) setSelectedId(linkedId)
+  }
   const [pickerOpen, setPickerOpen] = useState(false)
   const [profile, setProfile] = useState<User | null>(null)
   const [reportFor, setReportFor] = useState<User | null>(null)
+  const [query, setQuery] = useState('')
+  const [onlyUnread, setOnlyUnread] = useState(false)
 
   const active = users.find(u => u.id === selectedId && isMutual(u.id))
 
   if (!me) return null
+  const pendingIds = (match.likes[me.id] ?? []).filter(id => !isMutual(id))
+  const pending = users.filter(u => pendingIds.includes(u.id))
 
   const statusOf = (uid: string, lastAt: number, lastFrom: string, liked: boolean) => {
     if (isMutual(uid)) return { label: '互道有意', cls: 'bg-accent/15 text-gold border-accent/40' }
@@ -37,9 +47,11 @@ export function MatchesPage() {
         <span className="seal mx-auto flex h-14 w-14 font-xing text-2xl">音</span>
         <h1 className="mt-4 font-xing text-3xl text-foreground">暂无佳音</h1>
         <p className="mt-2 text-sm text-muted-foreground">双方真实互道「有意」后，会在这里开启佳音。</p>
+        {pendingIds.length > 0 && <div className="mt-5 rounded-lg border border-border bg-secondary/30 p-4 text-left"><p className="font-semibold text-foreground">已有 {pendingIds.length} 份有意等待对方自愿回应</p><p className="mt-1 text-xs text-muted-foreground">表达有意不等于对方已读或一定会回复；你可随时撤回自己的选择。</p>{pending.map(u => <button key={u.id} className="mt-2 mr-2 rounded-full border border-border px-3 py-1.5 text-xs text-primary" onClick={() => setProfile(u)}>{u.nickname} · 查看</button>)}</div>}
         <div className="mt-6 flex justify-center">
           <Link to="/yuanfen" className="btn-primary"><Sparkles size={15} />去看今日推荐</Link>
         </div>
+        <DetailDialog user={profile} onClose={() => setProfile(null)} />
       </div>
     )
   }
@@ -47,6 +59,7 @@ export function MatchesPage() {
   const activeConv = list.find(c => c.user.id === active?.id)
   const unreadConvs = list.filter(c => unread(c.user.id) > 0)
   const totalUnread = unreadConvs.reduce((s, c) => s + unread(c.user.id), 0)
+  const visibleList = list.filter(c => (!onlyUnread || unread(c.user.id) > 0) && (!query.trim() || c.user.nickname.toLowerCase().includes(query.trim().toLowerCase())))
 
   return (
     <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
@@ -56,6 +69,7 @@ export function MatchesPage() {
         <p className="mt-2 text-sm text-muted-foreground">这里只展示双方真实互道「有意」的关系 · 点头像看资料,点卡片进入聊天</p>
       </div>
 
+      {pendingIds.length > 0 && <div className="card-cn mx-auto mb-6 max-w-3xl rounded-lg p-4"><p className="font-semibold text-foreground">待回应的有意 · {pendingIds.length}</p><p className="mt-1 text-xs text-muted-foreground">这里只记录你主动表达过的有意，不暗示对方已经看过或即将回应。</p><div className="mt-2 flex flex-wrap gap-2">{pending.map(u => <button key={u.id} className="rounded-full border border-border px-3 py-1.5 text-xs text-primary" onClick={() => setProfile(u)}>{u.nickname} · 查看或撤回</button>)}</div></div>}
       {unreadConvs.length > 0 && (
         <div className="card-cn mx-auto mb-6 max-w-3xl rounded-lg p-3.5">
           <p className="text-xs tracking-widest text-gold">
@@ -83,9 +97,15 @@ export function MatchesPage() {
             <MessageSquarePlus size={16} />
             选择互配对象
           </button>
+          <input className="input-cn" type="search" aria-label="搜索互配对象" placeholder="按昵称搜索互配对象…" value={query} onChange={e => setQuery(e.target.value)} />
+          <div className="flex flex-wrap gap-2 text-xs">
+            <button className={cn('rounded-full border px-3 py-1.5', !onlyUnread ? 'bg-primary text-primary-foreground' : 'border-border')} onClick={() => setOnlyUnread(false)}>全部 {list.length}</button>
+            <button className={cn('rounded-full border px-3 py-1.5', onlyUnread ? 'bg-primary text-primary-foreground' : 'border-border')} onClick={() => setOnlyUnread(true)}>未读 {unreadConvs.length}</button>
+          </div>
+          {!visibleList.length && <p className="rounded-md border border-border p-3 text-center text-xs text-muted-foreground">没有符合条件的会话，换个筛选试试。</p>}
           <div className="flex gap-2 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
             {active && !list.some(c => c.user.id === active.id) && (
-              <div className="card-cn flex w-64 shrink-0 cursor-pointer items-center gap-3 rounded-lg p-3 ring-2 ring-primary lg:w-full" onClick={() => setSelectedId(active.id)}>
+              <div role="button" tabIndex={0} aria-label={`打开与${active.nickname}的聊天`} className="card-cn flex w-64 shrink-0 cursor-pointer items-center gap-3 rounded-lg p-3 ring-2 ring-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary lg:w-full" onClick={() => setSelectedId(active.id)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSelectedId(active.id) } }}>
                 <button className="shrink-0 transition hover:opacity-80" onClick={e => { e.stopPropagation(); setProfile(active) }} aria-label="查看资料">
                   <AvatarFrame user={active} className="h-11 w-11">
                     <img src={active.photos[0]} alt={active.nickname} className="h-full w-full rounded-full object-cover" />
@@ -97,14 +117,18 @@ export function MatchesPage() {
                 </span>
               </div>
             )}
-            {list.map(c => {
+            {visibleList.map(c => {
               const st = statusOf(c.user.id, c.lastAt, c.lastFrom, c.liked)
               return (
                 <div
                   key={c.user.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`打开与${c.user.nickname}的聊天`}
                   onClick={() => setSelectedId(c.user.id)}
+                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSelectedId(c.user.id) } }}
                   className={cn(
-                    'card-cn flex w-64 shrink-0 cursor-pointer items-center gap-3 rounded-lg p-3 transition lg:w-full',
+                    'card-cn flex w-64 shrink-0 cursor-pointer items-center gap-3 rounded-lg p-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary lg:w-full',
                     active?.id === c.user.id ? 'ring-2 ring-primary' : 'hover:ring-1 hover:ring-primary/40',
                   )}
                 >
@@ -145,7 +169,7 @@ export function MatchesPage() {
                 <div className="flex-1">
                   <p className="font-xing text-lg leading-none"><NickName user={active} className="text-foreground" /></p>
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    {regionOf(active)} · {active.job} · 契合 <span className="cjk-latin text-gold">{matchScore(active)}</span>%
+                    {regionOf(active)} · {active.job} · 规则参考 <span className="cjk-latin text-gold">{matchScore(active)}</span> 分
                   </p>
                   {me && active.interests.some(t => me.interests.includes(t)) && (
                     <p className="mt-1 flex flex-wrap gap-1">
@@ -171,9 +195,13 @@ export function MatchesPage() {
                     title="拉黑"
                     className="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-primary"
                     onClick={() => {
-                      toggleBlock(active.id)
-                      setSelectedId('')
-                      toast('已拉黑,本次聊天已关闭')
+                      void toggleBlock(active.id)
+                        .then(blocked => {
+                          if (!blocked) return
+                          setSelectedId('')
+                          toast.success('已拉黑,本次聊天已关闭')
+                        })
+                        .catch(e => toast.error(e instanceof Error ? e.message : '拉黑未保存,请重试'))
                     }}
                   >
                     <Ban size={15} />

@@ -2,9 +2,10 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { Medal, X, ShieldCheck, PhoneCall, Camera } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Verification } from '@/lib/store'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
 import { yuanLevel } from '@/lib/badges'
+import { TIER_STYLES } from '@/components/ui-constants'
 
 export function SectionHead({ kicker, title, desc, light }: { kicker: string; title: string; desc?: string; light?: boolean }) {
   return (
@@ -21,11 +22,35 @@ export function SectionHead({ kicker, title, desc, light }: { kicker: string; ti
 }
 
 export function Modal({ open, onClose, children, wide }: { open: boolean; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
+  useEffect(() => {
+    if (!open) return
+    const former = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    panelRef.current?.focus()
+    const keydown = (e: KeyboardEvent) => {
+      const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')
+      if (dialogs[dialogs.length - 1] !== panelRef.current) return
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeRef.current(); return }
+      if (e.key !== 'Tab' || !panelRef.current) return
+      const nodes = [...panelRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(el => el.getClientRects().length > 0)
+      if (!nodes.length) { e.preventDefault(); panelRef.current.focus(); return }
+      const first = nodes[0]
+      const last = nodes[nodes.length - 1]
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === panelRef.current)) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && (document.activeElement === last || !panelRef.current.contains(document.activeElement))) { e.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.removeEventListener('keydown', keydown); document.body.style.overflow = previousOverflow; former?.focus() }
+  }, [open])
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-red-ink/60 backdrop-blur-sm" onClick={onClose} />
-      <div className={cn('relative card-cn rounded-lg w-full max-h-[88vh] overflow-y-auto animate-pop', wide ? 'max-w-3xl' : 'max-w-md')}>
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="内容详情" tabIndex={-1} className={cn('relative card-cn rounded-lg w-full max-h-[88vh] overflow-y-auto animate-pop', wide ? 'max-w-3xl' : 'max-w-md')}>
         <button aria-label="关闭" onClick={onClose} className="absolute right-3 top-3 z-10 p-1.5 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground transition">
           <X size={18} />
         </button>
@@ -39,14 +64,14 @@ export function MatchRing({ value, size = 56 }: { value: number; size?: number }
   const r = (size - 8) / 2
   const c = 2 * Math.PI * r
   return (
-    <div className="relative shrink-0" style={{ width: size, height: size }} title={`契合度 ${value}%`}>
+    <div className="relative shrink-0" style={{ width: size, height: size }} title={`规则推荐参考 ${value} 分`}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="hsl(var(--border))" strokeWidth="4" />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="hsl(var(--primary))" strokeWidth="4" strokeLinecap="round" strokeDasharray={`${(c * value) / 100} ${c}`} />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
         <span className="font-xing text-primary" style={{ fontSize: size * 0.34 }}>{value}</span>
-        <span className="text-[9px] text-muted-foreground">契合</span>
+        <span className="text-[9px] text-muted-foreground">参考</span>
       </div>
     </div>
   )
@@ -138,15 +163,6 @@ export function Lightbox({ src, onClose }: { src: string; onClose: () => void })
     </div>
   )
 }
-
-/** 缘阶各阶的章色: 浅色处与照片暗底各一套, 阶越高越显贵气 */
-export const TIER_STYLES: Array<{ light: string; dark: string }> = [
-  { light: 'border border-border bg-secondary text-muted-foreground', dark: 'bg-card/85 text-muted-foreground' },
-  { light: 'border border-primary/40 bg-primary/10 text-primary', dark: 'bg-primary text-primary-foreground' },
-  { light: 'seal', dark: 'seal' },
-  { light: 'bg-red-ink text-primary-foreground', dark: 'bg-red-ink/95 text-primary-foreground ring-1 ring-gold/70' },
-  { light: 'bg-gradient-to-br from-gold to-gold-soft text-red-ink', dark: 'bg-gold text-red-ink' },
-]
 
 /** 缘阶等级章: 缀在昵称旁, 按点亮成就数进阶, 章色随阶而变 */
 export function LevelSeal({ user, gold, className }: { user: User; gold?: boolean; className?: string }) {

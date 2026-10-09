@@ -1,5 +1,5 @@
 import { BellRing, CalendarDays, MapPin, Pin } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { EventItem } from '@/lib/store'
 import { cn } from '@/lib/utils'
 
@@ -19,7 +19,7 @@ export function EventCard({ event, onOpen, album }: { event: EventItem; onOpen: 
   const quote = cs.length ? (cs.find(c => c.pinned) ?? cs[cs.length - 1]).text : ''
 
   return (
-    <div className="card-cn group cursor-pointer overflow-hidden rounded-lg transition hover:-translate-y-1 hover:shadow-lift" onClick={() => onOpen(event)}>
+    <button type="button" className="card-cn group block w-full cursor-pointer overflow-hidden rounded-lg text-left transition hover:-translate-y-1 hover:shadow-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => onOpen(event)} aria-label={`查看活动：${event.title}`}>
       <div className="relative">
         <img src={event.cover} alt={event.title} loading="lazy" className={cn('aspect-[16/9] w-full object-cover transition duration-500 group-hover:scale-105', past && 'opacity-80 saturate-[.7]')} />
         <div className="absolute left-3 top-3 flex h-14 w-14 flex-col items-center justify-center rounded-md bg-card/95 shadow-card">
@@ -75,6 +75,7 @@ export function EventCard({ event, onOpen, album }: { event: EventItem; onOpen: 
           )}
           <span className="inline-flex items-center gap-0.5"><CalendarDays size={11} />{event.date} {event.time}</span>
         </p>
+        <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">{event.venue ? `集合：${event.venue}` : '集合区域待发起人确认'} · {event.costNote ? `费用：${event.costNote}` : '费用待确认'}</p>
         <div className="flex flex-wrap gap-1">
           {event.tags.map(t => (
             <span key={t} className="rounded-sm bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground/80">{t}</span>
@@ -110,6 +111,6 @@ export function EventCard({ event, onOpen, album }: { event: EventItem; onOpen: 
           </span>
         </div>
       </div>
-    </div>
+    </button>
   )
 }

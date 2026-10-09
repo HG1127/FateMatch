@@ -15,10 +15,29 @@ import path from 'node:path'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
+import { createMessagingHandlers } from './domains/messaging.mjs'
+import { createProfileHandlers } from './domains/profiles.mjs'
+import { createSafetyHandlers } from './domains/safety.mjs'
+import { createMatchingGuards } from './domains/matching.mjs'
+import { createAuthHandlers } from './domains/auth.mjs'
+import { createEventHandlers } from './domains/events.mjs'
+import { createAdminHandlers } from './domains/admin.mjs'
+import { createStaticSiteHandler } from './static-site.mjs'
+import { createClientIpResolver } from './client-ip.mjs'
 
 const PORT = Number(process.env.PORT ?? 7000)
+const HOST = process.env.HOST ?? '0.0.0.0'
+const SERVE_STATIC = process.env.SERVE_STATIC === '1'
+let staticSite = null
 const SCHEMA = process.env.NEON_SCHEMA ?? 'public'
+if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(SCHEMA)) throw new Error('NEON_SCHEMA 无效')
 const DSN = process.env.NEON_DSN
+const ADMIN_EMAILS = new Set(
+  String(process.env.SY_ADMIN_EMAILS ?? process.env.ADMIN_EMAILS ?? '')
+    .split(/[\s,;]+/)
+    .map(x => x.trim().toLowerCase())
+    .filter(Boolean),
+)
 if (!DSN) {
   console.error('缺少 NEON_DSN 环境变量')
   process.exit(1)
@@ -29,7 +48,8 @@ const tq = (name) => `"${SCHEMA}"."${name}"`
 
 const pool = new pg.Pool({
   connectionString: DSN,
-  ssl: { rejectUnauthorized: false },
+  // 生产环境必须验证 Neon TLS 服务端证书；开发自签名兼容仅留给本机测试。
+  ssl: { rejectUnauthorized: process.env.NODE_ENV === 'production' },
   max: 5,
   connectionTimeoutMillis: 15000,
   idleTimeoutMillis: 60000,
@@ -63,6 +83,7 @@ const RegisterBody = z.object({
   password: z.string().min(8, '密码至少 8 位').max(200, '密码过长'),
   passwordConfirm: z.string().min(8, '密码至少 8 位').max(200, '密码过长'),
   name: z.string().max(60, '昵称过长').optional(),
+  adultConfirmed: z.boolean().refine(Boolean, '请先确认已满 18 周岁'),
 })
 
 const PasswordChangeBody = z.object({
@@ -122,7 +143,7 @@ const TEXT_LIMITS = {
   event_comments: { text: 1000 },
   chat_messages: { text: 2000 },
   profiles: { nickname: 30, bio: 500, job: 50, city: 30, region: 30 },
-  events: { title: 60, desc: 5000, requirements: 1000, city: 30, region: 30, host: 60 },
+  events: { title: 60, desc: 5000, requirements: 1000, city: 30, region: 30, host: 60, venue: 140, cost_note: 300, cancel_note: 500 },
   contacts: { text: 200 },
   reports: { reason: 100, note: 1000 },
   digests: { title: 40, intro: 300 },
@@ -146,7 +167,7 @@ const WORD_FILTER_FIELDS = {
   posts: ['text', 'topic'],
   post_comments: ['text'],
   event_comments: ['text'],
-  events: ['title', 'desc', 'requirements'],
+  events: ['title', 'desc', 'requirements', 'venue', 'cost_note', 'cancel_note'],
   profiles: ['nickname', 'bio'],
 }
 let extraBlockedWords = [] // 掌柜自定义追加词（内存缓存，启动加载 + 管理端点保存时刷新）
@@ -174,6 +195,31 @@ function checkBlockedWords(table, col, v, auth, fieldKey) {
       throw new HttpErr(400, 'Validation failed.', { [fieldKey]: { message: `内容包含违规词「${w}」，请修改后再提交` } })
     }
   }
+}
+
+async function isConfiguredAdminId(userId) {
+  if (!userId || !ADMIN_EMAILS.size) return false
+  const r = await q(`select lower(email) email from ${tq('users')} where id = $1 limit 1`, [userId])
+  return !!r.rows[0]?.email && ADMIN_EMAILS.has(String(r.rows[0].email))
+}
+
+/**
+ * 显式管理员白名单：只由服务端环境变量控制，不允许前端以“首个账号”猜测管理员。
+ * 已存在的 admin 不会因移出白名单自动降权；白名单主要用于首管/运维授予。
+ */
+async function bootstrapConfiguredAdmins() {
+  if (!ADMIN_EMAILS.size || !COLUMNS.has('users') || !COLUMNS.has('profiles')) return 0
+  const emails = [...ADMIN_EMAILS]
+  const r = await q(
+    `update ${tq('profiles')} p
+     set role = 'admin', updated = now()
+     from ${tq('users')} u
+     where p.sid = u.id and lower(u.email) = any($1::text[]) and coalesce(p.role, '') <> 'admin'
+     returning p.sid`,
+    [emails],
+  )
+  if (r.rowCount) console.log(`admin-bootstrap: promoted ${r.rowCount} configured account(s)`)
+  return r.rowCount ?? 0
 }
 
 // ---------- 权限规则（与原数据服务逐条一致） ----------
@@ -214,35 +260,31 @@ const hostOrSelfRead = (f) => async (row, auth) => {
 const HOSTED = 'hosted'
 const HOSTED_FIELD = { checkins: 'owner_sid', contacts: 'user_sid' }
 
-/**
- * 拉黑语义的服务端强制（v1.6，此前只有客户端过滤，直连接口可绕过）：
- * 任一方拉黑另一方后，私信与心动都被拒绝；掌柜处置回音不受限。
- */
-async function assertNoBlock(a, b, auth, msg) {
-  if (!a || !b || a === b) return
-  if (auth?.role === 'admin') return
-  const r = await q(
-    `select 1 from ${tq('blocks')} where (owner_sid = $1 and target_sid = $2) or (owner_sid = $2 and target_sid = $1) limit 1`,
-    [a, b],
-  )
-  if (r.rows[0]) throw new HttpErr(403, msg)
+class HttpErr extends Error {
+  constructor(status, message, data = {}) {
+    super(message)
+    this.status = status
+    this.data = data
+  }
 }
 
+const { assertMutualChat, assertLikeAllowed } = createMatchingGuards({ q, tq, HttpErr })
+
 const CREATE_HOOKS = {
-  chat_messages: (data, auth) =>
-    assertNoBlock(String(data.get('sid_a') ?? ''), String(data.get('sid_b') ?? ''), auth, '消息已发出，但被对方拒收了'),
-  user_likes: (data, auth) =>
-    assertNoBlock(String(data.get('owner_sid') ?? ''), String(data.get('target_sid') ?? ''), auth, '对方已将你加入黑名单，无法互动'),
+  chat_messages: assertMutualChat,
+  user_likes: assertLikeAllowed,
 }
 
 const RULES = {
   users: { list: SELF, view: SELF, create: OPEN, update: SELF, delete: SELF },
-  profiles: { list: OPEN, view: OPEN, create: [me('sid'), ADMIN], update: [me('sid'), ADMIN], delete: ADMIN },
-  posts: { list: OPEN, view: OPEN, create: [me('author_sid'), ADMIN], update: [me('author_sid'), ADMIN], delete: ADMIN },
-  post_comments: { list: OPEN, view: OPEN, create: [me('author_sid'), ADMIN], update: [me('author_sid'), ADMIN], delete: [me('author_sid'), ADMIN] },
-  events: { list: OPEN, view: OPEN, create: [me('creator_sid'), ADMIN], update: [me('creator_sid'), ADMIN], delete: [me('creator_sid'), ADMIN] },
-  event_comments: { list: OPEN, view: OPEN, create: [me('author_sid'), ADMIN], update: eventCommentWrite, delete: eventCommentWrite },
-  chat_messages: { list: [me('sid_a'), me('sid_b'), ADMIN], view: [me('sid_a'), me('sid_b'), ADMIN], create: [me('sid_a'), me('sid_b'), ADMIN], update: [me('sid_a'), me('sid_b'), ADMIN], delete: [me('from_sid'), ADMIN] },
+  // 真人业务数据仅登录成员可读；游客首页只使用本地明确标注的演示素材。
+  profiles: { list: ADMIN, view: A, create: [me('sid'), ADMIN], update: [me('sid'), ADMIN], delete: ADMIN },
+  posts: { list: A, view: A, create: [me('author_sid'), ADMIN], update: [me('author_sid'), ADMIN], delete: ADMIN },
+  post_comments: { list: A, view: A, create: [me('author_sid'), ADMIN], update: [me('author_sid'), ADMIN], delete: [me('author_sid'), ADMIN] },
+  events: { list: A, view: A, create: [me('creator_sid'), ADMIN], update: [me('creator_sid'), ADMIN], delete: [me('creator_sid'), ADMIN] },
+  event_comments: { list: A, view: A, create: [me('author_sid'), ADMIN], update: eventCommentWrite, delete: eventCommentWrite },
+  // 私信内容仅会话双方可读写；管理员通过举报/安全事件治理，不直接读取或改写会员私信正文与图片。
+  chat_messages: { list: [me('sid_a'), me('sid_b')], view: [me('sid_a'), me('sid_b')], create: [me('from_sid')], update: [me('from_sid')], delete: [me('from_sid')] },
   user_likes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   user_passes: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   user_reads: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
@@ -251,12 +293,13 @@ const RULES = {
   visits: { list: [me('viewer_sid'), me('viewed_sid'), ADMIN], view: [me('viewer_sid'), me('viewed_sid'), ADMIN], create: [me('viewer_sid')], update: [me('viewer_sid')], delete: [me('viewer_sid'), ADMIN] },
   blocks: { list: [me('owner_sid'), me('target_sid'), ADMIN], view: [me('owner_sid'), me('target_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
   reminders: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
-  checkins: { list: HOSTED, view: hostOrSelfRead('owner_sid'), create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
+  // 到场记录只能通过现场核销端点创建，关闭通用集合直写。
+  checkins: { list: HOSTED, view: hostOrSelfRead('owner_sid'), create: DENY, update: DENY, delete: [me('owner_sid'), ADMIN] },
   contacts: { list: HOSTED, view: hostOrSelfRead('user_sid'), create: [me('user_sid')], update: [me('user_sid')], delete: [me('user_sid'), ADMIN] },
   reports: { list: [me('by_sid'), ADMIN], view: [me('by_sid'), ADMIN], create: [me('by_sid')], update: ADMIN, delete: ADMIN },
-  digests: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: ADMIN },
-  content_likes: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
-  event_attendees: { list: OPEN, view: OPEN, create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
+  digests: { list: A, view: A, create: ADMIN, update: ADMIN, delete: ADMIN },
+  content_likes: { list: A, view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
+  event_attendees: { list: A, view: hostOrSelfRead('owner_sid'), create: [me('owner_sid')], update: DENY, delete: [me('owner_sid'), ADMIN] },
   admin_logs: { list: ADMIN, view: ADMIN, create: ADMIN, update: ADMIN, delete: ADMIN },
   site_settings: { list: OPEN, view: OPEN, create: ADMIN, update: ADMIN, delete: DENY },
   user_tour: { list: [me('owner_sid'), ADMIN], view: [me('owner_sid'), ADMIN], create: [me('owner_sid')], update: [me('owner_sid')], delete: [me('owner_sid'), ADMIN] },
@@ -308,14 +351,6 @@ function verifyToken(token) {
 
 // ---------- 工具 ----------
 
-class HttpErr extends Error {
-  constructor(status, message, data = {}) {
-    super(message)
-    this.status = status
-    this.data = data
-  }
-}
-
 // ---------- v1.4 限流与防爆破（内存固定窗口；单进程语义，重启清零，接公网/多实例前需升级共享态） ----------
 
 const RATE_BUCKETS = new Map() // key -> { n, resetAt }
@@ -348,9 +383,11 @@ setInterval(() => {
   for (const [k, b] of RATE_BUCKETS) if (b.resetAt <= now) RATE_BUCKETS.delete(k)
 }, 10 * 60 * 1000).unref()
 
-/** 客户端 IP：优先取代理转发的第一跳 */
-const clientIp = (req) =>
-  String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
+// Default: only trust the network socket peer, never a caller-supplied header.
+// Reverse proxies may be trusted by explicitly setting TRUSTED_PROXY_IPS.
+const clientIp = createClientIpResolver(
+  String(process.env.TRUSTED_PROXY_IPS ?? '').split(/[,;\s]+/).filter(Boolean),
+)
 
 // 登录防爆破：同一邮箱连续错 8 次锁 15 分钟；锁定期在密码校验之前判定（正确密码也拒）
 const AUTH_FAILS = new Map() // identity -> { n, lockUntil }
@@ -414,7 +451,7 @@ function assertNotLocked(identity, ip) {
   if (rec && rec.lockUntil > Date.now()) {
     METRICS.authLockedRejects += 1
     const mins = Math.ceil((rec.lockUntil - Date.now()) / 60000)
-    console.warn(`auth-locked-reject: ${identity} ip=${ip}`)
+    console.warn(`auth-locked-reject: ${maskIdentity(identity)} ip=${ip}`)
     secEvent('auth_locked_reject', { identity, ip })
     throw new HttpErr(429, `密码错误次数过多，请 ${mins} 分钟后再试`)
   }
@@ -428,10 +465,10 @@ function noteAuthFail(identity, ip) {
     rec.lockUntil = Date.now() + AUTH_LOCK_MS
     rec.n = 0
     METRICS.authLocks += 1
-    console.warn(`auth-lock: ${identity} ip=${ip} 锁定 ${AUTH_LOCK_MS / 60000} 分钟`)
+    console.warn(`auth-lock: ${maskIdentity(identity)} ip=${ip} 锁定 ${AUTH_LOCK_MS / 60000} 分钟`)
     secEvent('auth_lock', { identity, ip, detail: { minutes: AUTH_LOCK_MS / 60000 } })
   } else {
-    console.warn(`auth-fail: ${identity} ip=${ip} n=${rec.n}`)
+    console.warn(`auth-fail: ${maskIdentity(identity)} ip=${ip} n=${rec.n}`)
     secEvent('auth_fail', { identity, ip, detail: { n: rec.n } })
   }
   AUTH_FAILS.set(identity, rec)
@@ -474,6 +511,34 @@ function toRecord(table, row) {
   return rec
 }
 
+/**
+ * 互动计数表对普通会员只暴露计数所需的匿名占位：
+ * - 本人自己的行保持真实 owner_sid，客户端才能判断“我已点赞/已报名”；
+ * - 活动发起人能看到自己活动的真实报名人；
+ * - 其他人的 owner_sid 与带身份信息的业务 sid 同时匿名化，避免从网络响应还原关系图。
+ */
+async function listRecordsForAuth(table, rows, auth) {
+  if (!auth || auth.role === 'admin' || (table !== 'content_likes' && table !== 'event_attendees')) {
+    return rows.map((row) => toRecord(table, row))
+  }
+  let hosted = new Set()
+  if (table === 'event_attendees') {
+    const r = await q(`select sid from ${tq('events')} where creator_sid = $1`, [auth.id])
+    hosted = new Set(r.rows.map((row) => String(row.sid ?? '')))
+  }
+  return rows.map((row) => {
+    const rec = toRecord(table, row)
+    const mine = String(row.owner_sid ?? '') === auth.id
+    const hostCanSee = table === 'event_attendees' && hosted.has(String(row.event_sid ?? ''))
+    if (!mine && !hostCanSee) {
+      const anon = `anon:${row.id}`
+      rec.sid = anon
+      rec.owner_sid = anon
+    }
+    return rec
+  })
+}
+
 /** 请求体字段 -> DB 列（未知字段、已拆分旧列、非掌柜写敏感字段一律忽略；超尺寸字段拒绝） */
 function bodyToCols(table, body, auth) {
   const cols = COLUMNS.get(table)
@@ -499,6 +564,58 @@ function bodyToCols(table, body, auth) {
     out.set(col, v)
   }
   return out
+}
+
+// 更新时不能改写关系/消息归属字段，否则本人可以把自己的记录“改成”他人行为。
+
+/** 业务语义护栏：尺寸正确不代表业务事实有效。 */
+function validateBusinessData(table, data, mode = 'write') {
+  if (table === 'posts' && mode === 'create') {
+    const topic = String(data.get('topic') ?? '')
+    if (!['认识我', '兴趣见闻', '活动回顾', '想一起做'].includes(topic)) {
+      throw new HttpErr(400, 'Validation failed.', { topic: { message: '请选择有效的内容方向' } })
+    }
+    return
+  }
+  if (table !== 'profiles') return
+  for (const field of ['gender', 'seeking']) {
+    if (!data.has(field)) continue
+    const v = String(data.get(field) ?? '')
+    if (!['male', 'female', 'unknown'].includes(v)) {
+      throw new HttpErr(400, 'Validation failed.', { [field]: { message: '选项无效' } })
+    }
+  }
+  if (data.has('birth_date')) {
+    const raw = String(data.get('birth_date') ?? '').trim()
+    if (raw) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        throw new HttpErr(400, 'Validation failed.', { birthDate: { message: '出生日期格式不正确' } })
+      }
+      const d = new Date(`${raw}T00:00:00Z`)
+      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== raw) {
+        throw new HttpErr(400, 'Validation failed.', { birthDate: { message: '出生日期无效' } })
+      }
+      const now = new Date()
+      let age = now.getUTCFullYear() - d.getUTCFullYear()
+      const md = now.getUTCMonth() - d.getUTCMonth()
+      if (md < 0 || (md === 0 && now.getUTCDate() < d.getUTCDate())) age--
+      if (age < 18) throw new HttpErr(400, 'Validation failed.', { birthDate: { message: '随缘网仅面向 18 周岁以上成年人' } })
+      if (age > 120) throw new HttpErr(400, 'Validation failed.', { birthDate: { message: '请检查出生日期' } })
+    }
+  }
+  if (data.has('height')) {
+    const h = Number(data.get('height') ?? 0)
+    if (!Number.isFinite(h) || (h !== 0 && (h < 140 || h > 220))) {
+      throw new HttpErr(400, 'Validation failed.', { height: { message: '身高请填写 140–220 cm，或留空' } })
+    }
+  }
+}
+
+const UPDATE_IMMUTABLE_FIELDS = {
+  chat_messages: ['sid', 'sid_a', 'sid_b', 'from_sid', 'at'],
+  user_likes: ['sid', 'owner_sid', 'target_sid'],
+  user_passes: ['sid', 'owner_sid', 'target_sid'],
+  blocks: ['sid', 'owner_sid', 'target_sid'],
 }
 
 function castParam(colType, v) {
@@ -534,6 +651,72 @@ function needAuth(auth) {
   if (!auth) throw new HttpErr(403, 'You are not allowed to perform this operation.')
   return auth
 }
+const authHandlers = createAuthHandlers({
+  q,
+  tq,
+  needAuth,
+  HttpErr,
+  parseAuthBody: (body) => vparse(AuthBody, body),
+  assertNotLocked,
+  noteAuthFail,
+  clearAuthFail: (identity) => AUTH_FAILS.delete(identity),
+  comparePassword: (password, hash) => bcrypt.compareSync(password, hash),
+  secEvent,
+  signToken,
+  pwFingerprint,
+  colIdOf,
+  toRecord,
+})
+
+const { handleChatSummaries, handleChatConversation, handleChatActivity, handleRelationshipFeedback, handleRelationshipFeedbackSet } = createMessagingHandlers({
+  q,
+  tq,
+  needAuth,
+  HttpErr,
+})
+
+const { handleProfileLookup, handleDiscoveryProfiles, handleMyVisits } = createProfileHandlers({
+  q,
+  tq,
+  needAuth,
+  HttpErr,
+  toRecord,
+})
+
+const safetyHandlers = createSafetyHandlers({
+  q,
+  tq,
+  needAuth,
+  needAdmin,
+  HttpErr,
+  pool,
+  toRecord,
+  secEvent,
+  defaultBlockedWords: DEFAULT_BLOCKED_WORDS,
+  getExtraBlockedWords: () => extraBlockedWords,
+  setExtraBlockedWords: (words) => { extraBlockedWords = words },
+})
+
+const eventHandlers = createEventHandlers({
+  q,
+  tq,
+  needAuth,
+  HttpErr,
+  toRecord,
+  genId,
+  getCheckinSecret: () => JWT_SECRET,
+})
+
+const adminHandlers = createAdminHandlers({
+  q,
+  tq,
+  needAdmin,
+  HttpErr,
+  hashPassword: (value) => bcrypt.hashSync(value, 10),
+  metrics: METRICS,
+  secEvent,
+  tableCount: () => [...COLUMNS.keys()].filter((x) => RULES[x]).length,
+})
 
 /** 行级规则判定（支持声明式规则与异步函数规则） */
 async function allowRow(rule, row, auth) {
@@ -614,8 +797,128 @@ async function handleList(table, url, req, auth) {
     perPage,
     totalItems,
     totalPages: Math.max(1, Math.ceil(totalItems / perPage)),
-    items: r.rows.map((row) => toRecord(table, row)),
+    items: await listRecordsForAuth(table, r.rows, auth),
   }
+}
+
+/** 社区帖子专用分页：列表只查询当前页帖子及其评论，避免登录时全量拉取社区内容。 */
+async function handleCommunityPosts(url, auth) {
+  needAuth(auth)
+  const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+  const perPage = Math.min(36, Math.max(1, Number(url.searchParams.get('perPage') ?? 18) || 18))
+  const topic = String(url.searchParams.get('topic') ?? '').trim().slice(0, 30)
+  const keyword = String(url.searchParams.get('q') ?? '').trim().slice(0, 100)
+  const sort = url.searchParams.get('sort') === 'hot' ? 'hot' : 'new'
+  const localFirst = url.searchParams.get('localFirst') !== '0'
+  const ids = String(url.searchParams.get('ids') ?? '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 50)
+  const demoPostIds = ['p01','p02','p03','p04','p05','p06','p07','p08','p09','p10','p11']
+  const demoAuthorIds = ['u01','u02','u03','u04','u05','u06','u07','u08','u09','u10','u11','u12','adm']
+
+  const meR = await q(`select city from ${tq('profiles')} where sid = $1 limit 1`, [auth.id])
+  const myCity = String(meR.rows[0]?.city ?? '')
+  const params = [auth.id, demoPostIds, demoAuthorIds]
+  const conditions = [
+    `not (p.sid = any($2::text[]))`,
+    `not (p.author_sid = any($3::text[]))`,
+    `coalesce(a.banned, false) = false`,
+    `not exists (select 1 from ${tq('blocks')} b where (b.owner_sid = $1 and b.target_sid = p.author_sid) or (b.owner_sid = p.author_sid and b.target_sid = $1))`,
+  ]
+  if (ids.length) {
+    params.push(ids)
+    conditions.push(`p.sid = any($${params.length}::text[])`)
+  }
+  if (topic) {
+    params.push(topic)
+    conditions.push(`p.topic = $${params.length}`)
+  }
+  if (keyword) {
+    params.push(`%${keyword}%`)
+    const n = params.length
+    conditions.push(`(p.text ilike $${n} or p.topic ilike $${n} or coalesce(a.nickname, '') ilike $${n})`)
+  }
+  const where = `where ${conditions.join(' and ')}`
+  const cnt = await q(
+    `select count(*)::int n from ${tq('posts')} p left join ${tq('profiles')} a on a.sid = p.author_sid ${where}`,
+    params,
+  )
+  const totalItems = Number(cnt.rows[0]?.n ?? 0)
+  const order = [
+    `coalesce(p.featured, false) desc`,
+    localFirst && myCity ? `(a.city = $${params.length + 1}) desc` : null,
+    sort === 'hot' ? `coalesce(l.cnt, 0) desc` : null,
+    `p.at desc`,
+    `p.id asc`,
+  ].filter(Boolean).join(', ')
+  const listParams = [...params]
+  if (localFirst && myCity) listParams.push(myCity)
+  listParams.push(perPage, (page - 1) * perPage)
+  const limitPos = listParams.length - 1
+  const offsetPos = listParams.length
+  const rows = await q(
+    `select p.*, coalesce(l.cnt, 0)::int like_count, coalesce(l.mine, false) liked_by_me
+     from ${tq('posts')} p
+     left join ${tq('profiles')} a on a.sid = p.author_sid
+     left join lateral (
+       select count(*)::int cnt, coalesce(bool_or(owner_sid = $1), false) mine
+       from ${tq('content_likes')}
+       where kind = 'post' and target_sid = p.sid
+     ) l on true
+     ${where}
+     order by ${order}
+     limit $${limitPos} offset $${offsetPos}`,
+    listParams,
+  )
+
+  const postIds = rows.rows.map(row => String(row.sid))
+  let comments = []
+  if (postIds.length) {
+    const cr = await q(
+      `select * from ${tq('post_comments')} where post_sid = any($1::text[]) order by at asc, created asc, id asc`,
+      [postIds],
+    )
+    comments = cr.rows
+  }
+  const commentsBy = new Map()
+  for (const c of comments) {
+    const k = String(c.post_sid)
+    const list = commentsBy.get(k)
+    const item = { id: String(c.sid), authorId: String(c.author_sid ?? ''), text: String(c.text ?? ''), at: Number(c.at ?? 0), likes: [] }
+    if (list) list.push(item)
+    else commentsBy.set(k, [item])
+  }
+
+  const items = rows.rows.map(row => {
+    const count = Number(row.like_count ?? 0)
+    const mine = !!row.liked_by_me
+    const likes = []
+    if (mine) likes.push(auth.id)
+    for (let i = likes.length; i < count; i++) likes.push(`anon:post:${row.id}:${i}`)
+    return {
+      id: String(row.sid),
+      authorId: String(row.author_sid ?? ''),
+      text: String(row.text ?? ''),
+      images: Array.isArray(row.images) ? row.images : [],
+      topic: String(row.topic ?? ''),
+      featured: !!row.featured,
+      likes,
+      comments: commentsBy.get(String(row.sid)) ?? [],
+      at: Number(row.at ?? 0),
+    }
+  })
+
+  return {
+    page,
+    perPage,
+    totalItems,
+    totalPages: Math.max(1, Math.ceil(totalItems / perPage)),
+    items,
+  }
+}
+
+async function handleCommunityDigests(auth) {
+  needAuth(auth)
+  const r = await q(`select * from ${tq('digests')} order by issue desc, at desc, created desc limit 8`)
+  return r.rows.map(row => toRecord('digests', row))
 }
 
 async function handleViewOne(table, id, auth) {
@@ -634,6 +937,8 @@ async function handleCreate(table, body, auth) {
   const cols = COLUMNS.get(table)
   const data = bodyToCols(table, body, auth)
   // 建行业务钩子（如拉黑拦截），先于入库
+  validateBusinessData(table, data, 'create')
+  if (table === 'profiles' && auth && await isConfiguredAdminId(auth.id)) data.set('role', 'admin')
   const hook = CREATE_HOOKS[table]
   if (hook) await hook(data, auth)
   const id = typeof body?.id === 'string' && body.id ? body.id : genId()
@@ -710,6 +1015,44 @@ async function handleCreate(table, body, auth) {
     } finally {
       client.release()
     }
+  } else if (table === 'admin_logs' || table === 'digests') {
+    // 管理日志与每周精选在服务端原子执行「写入 + 保留策略」，避免依赖客户端全量同步做裁剪。
+    const names = ['id', ...data.keys()]
+    const values = [id, ...[...data.entries()].map(([c, v]) => castParam(cols.get(c), v))]
+    const ph = names.map((_, i) => `$${i + 1}`)
+    const quoted = names.map((n) => `"${n}"`)
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      try {
+        await client.query(
+          `insert into ${tq(table)} (${quoted.join(',')}, created, updated) values (${ph.join(',')}, now(), now())`,
+          values,
+        )
+      } catch (e) {
+        if (e?.code === '23505' && data.has('sid')) {
+          await client.query('rollback')
+          const ex = await q(`select * from ${tq(table)} where sid = $1`, [data.get('sid')])
+          if (ex.rows[0]) return toRecord(table, ex.rows[0])
+        }
+        throw e
+      }
+      if (table === 'admin_logs') {
+        await client.query(
+          `delete from ${tq('admin_logs')} where id in (select id from ${tq('admin_logs')} order by at desc, created desc offset 100)`,
+        )
+      } else {
+        await client.query(
+          `delete from ${tq('digests')} where id in (select id from ${tq('digests')} order by issue desc, at desc, created desc offset 8)`,
+        )
+      }
+      await client.query('commit')
+    } catch (e) {
+      try { await client.query('rollback') } catch { /* 已回滚或连接断开 */ }
+      throw e
+    } finally {
+      client.release()
+    }
   } else {
     const names = ['id', ...data.keys()]
     const values = [id, ...[...data.entries()].map(([c, v]) => castParam(cols.get(c), v))]
@@ -721,7 +1064,7 @@ async function handleCreate(table, body, auth) {
         values,
       )
     } catch (e) {
-      // sid 撞唯一索引：全量同步架构下多端并发重复建同一行，幂等返回已存在的记录
+      // sid 撞唯一索引：可重试命令并发重复建同一行时，幂等返回已存在记录。
       if (e?.code === '23505' && data.has('sid')) {
         const ex = await q(`select * from ${tq(table)} where sid = $1`, [data.get('sid')])
         if (ex.rows[0]) return toRecord(table, ex.rows[0])
@@ -769,6 +1112,32 @@ async function handleUpdate(table, id, body, auth) {
   }
 
   const data = bodyToCols(table, body, auth)
+  for (const col of UPDATE_IMMUTABLE_FIELDS[table] ?? []) data.delete(col)
+  if (table === 'chat_messages') {
+    const keys = [...data.keys()]
+    if (keys.some((k) => k !== 'recalled') || !data.has('recalled') || data.get('recalled') !== true) {
+      throw new HttpErr(400, 'Validation failed.', { recalled: { message: '已发送消息只允许执行撤回' } })
+    }
+    if (!existing.recalled) {
+      const sentAt = Number(existing.at ?? 0)
+      if (!sentAt || Date.now() - sentAt > 2 * 60_000) {
+        throw new HttpErr(400, 'Validation failed.', { recalled: { message: '消息发送超过 2 分钟，无法撤回' } })
+      }
+    }
+  }
+  if (table === 'posts' && data.has('topic')) {
+    const topic = String(data.get('topic') ?? '')
+    const previousTopic = String(existing.topic ?? '')
+    const currentTopics = ['认识我', '兴趣见闻', '活动回顾', '想一起做']
+    // 历史旧帖可继续原样保存/精选，但不能把任何帖子主动改成旧的泛话题。
+    if (!currentTopics.includes(topic) && topic !== previousTopic) {
+      throw new HttpErr(400, 'Validation failed.', { topic: { message: '请选择有效的内容方向' } })
+    }
+  }
+  validateBusinessData(table, data, 'update')
+  // UPDATE 与返回必须是一个原子 SQL；不可先 UPDATE 再 SELECT，
+  // 否则账号并发注销会删掉中间的行并造成 toRecord(undefined) → 500。
+  let updatedRow = null
   if (data.size) {
     // 掌柜处置动作落安全事件（停用 / 恢复 / 角色变更），仅在实际发生变化时记录
     if (table === 'profiles' && auth?.role === 'admin') {
@@ -786,10 +1155,15 @@ async function handleUpdate(table, id, body, auth) {
       sets.push(`"${c}" = $${values.length}`)
     }
     values.push(id)
-    await q(`update ${tq(table)} set ${sets.join(', ')}, updated = now() where id = $${values.length}`, values)
+    const updated = await q(`update ${tq(table)} set ${sets.join(', ')}, updated = now() where id = $${values.length} returning *`, values)
+    updatedRow = updated.rows[0] ?? null
+  } else {
+    // 修改密码等特殊更新可能通过独立 SQL 写入，仍须读取最新版本。
+    const after = await q(`select * from ${tq(table)} where id = $1`, [id])
+    updatedRow = after.rows[0] ?? null
   }
-  const after = await q(`select * from ${tq(table)} where id = $1`, [id])
-  return toRecord(table, after.rows[0])
+  if (!updatedRow) throw new HttpErr(404, 'The requested resource wasn\'t found.')
+  return toRecord(table, updatedRow)
 }
 
 async function handleDelete(table, id, auth) {
@@ -808,8 +1182,30 @@ async function handleDelete(table, id, auth) {
     secEvent('content_deleted', { actorSid: auth?.id ?? '', detail: { table, sid: String(r.rows[0].sid ?? r.rows[0].id) } })
     return null // 204
   }
+  if (table === 'post_comments' || table === 'event_comments') {
+    await cascadeCommentDelete(table, r.rows[0])
+    return null // 204
+  }
   await q(`delete from ${tq(table)} where id = $1`, [id])
   return null // 204
+}
+
+/** 删除单条评论时同时清掉落在该评论上的点赞，避免孤儿关系。 */
+async function cascadeCommentDelete(table, row) {
+  const sid = String(row.sid ?? row.id)
+  const kind = table === 'post_comments' ? 'post_comment' : 'event_comment'
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await client.query(`delete from ${tq('content_likes')} where kind = $1 and target_sid = $2`, [kind, sid])
+    await client.query(`delete from ${tq(table)} where id = $1`, [row.id])
+    await client.query('commit')
+  } catch (e) {
+    try { await client.query('rollback') } catch { /* 已断开 */ }
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 /**
@@ -829,6 +1225,7 @@ async function cascadeContentDelete(table, row) {
         [sid, cSids],
       )
       await client.query(`delete from ${tq('post_comments')} where post_sid = $1`, [sid])
+      await client.query(`delete from ${tq('favorites')} where fav_type = 'posts' and target_sid = $1`, [sid])
     } else {
       const cs = await client.query(`select sid from ${tq('event_comments')} where event_sid = $1`, [sid])
       const cSids = cs.rows.map((x) => x.sid)
@@ -837,6 +1234,8 @@ async function cascadeContentDelete(table, row) {
       await client.query(`delete from ${tq('event_attendees')} where event_sid = $1`, [sid])
       await client.query(`delete from ${tq('checkins')} where event_sid = $1`, [sid])
       await client.query(`delete from ${tq('contacts')} where event_sid = $1`, [sid])
+      await client.query(`delete from ${tq('reminders')} where event_sid = $1`, [sid])
+      await client.query(`delete from ${tq('favorites')} where fav_type = 'events' and target_sid = $1`, [sid])
     }
     await client.query(`delete from ${tq(table)} where id = $1`, [row.id])
     await client.query('commit')
@@ -883,6 +1282,18 @@ async function cascadeUserDelete(id) {
     ]) {
       await client.query(`delete from ${tq(t)} where "${f}" = $1`, [id])
     }
+    // 试点内部行为/反馈表不挂通用权限；注销时动态确认存在后清理双方关联数据。
+    const internalTables = await client.query(
+      `select table_name from information_schema.tables where table_schema = $1 and table_name = any($2::text[])`,
+      [SCHEMA, ['discovery_exposures', 'relationship_feedback']],
+    )
+    const internal = new Set(internalTables.rows.map(row => String(row.table_name)))
+    if (internal.has('discovery_exposures')) {
+      await client.query(`delete from ${tq('discovery_exposures')} where viewer_sid = $1 or target_sid = $1`, [id])
+    }
+    if (internal.has('relationship_feedback')) {
+      await client.query(`delete from ${tq('relationship_feedback')} where owner_sid = $1 or other_sid = $1`, [id])
+    }
     await client.query(`delete from ${tq('profiles')} where sid = $1`, [id])
     // chat_messages 保留：会话是双方共有记录，对方侧仍需可读
     await client.query(`delete from ${tq('users')} where id = $1`, [id])
@@ -897,90 +1308,10 @@ async function cascadeUserDelete(id) {
   }
 }
 
-// ---------- v1.12 掌柜管理端点：安全事件查询 / 敏感词表维护 ----------
-
 function needAdmin(auth) {
   needAuth(auth)
   if (auth.role !== 'admin') throw new HttpErr(403, 'You are not allowed to perform this operation.')
   return auth
-}
-
-/** 最近安全事件（倒序，可按类型过滤；limit ≤200） */
-async function handleAdminSecurityEvents(url, auth) {
-  needAdmin(auth)
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? 100) || 100))
-  const type = String(url.searchParams.get('type') ?? '')
-  const params = [limit]
-  let wsql = ''
-  if (type && /^[a-z_]{1,40}$/.test(type)) {
-    wsql = 'where "type" = $2'
-    params.push(type)
-  }
-  const r = await q(
-    `select id, "type", actor_sid, identity, ip, detail, "at" from ${tq('security_events')} ${wsql} order by "at" desc limit $1`,
-    params,
-  )
-  return { items: r.rows }
-}
-
-/** 敏感词表读取 / 保存（自定义词存 gateway_meta；保存即时生效并落安全事件） */
-async function handleAdminWordFilter(req, body, auth) {
-  needAdmin(auth)
-  if (req.method === 'GET') return { defaults: DEFAULT_BLOCKED_WORDS, words: extraBlockedWords }
-  const raw = body?.words
-  if (!Array.isArray(raw)) throw new HttpErr(400, 'Validation failed.', { words: { message: '词表须为数组' } })
-  const words = [...new Set(raw.map((x) => String(x ?? '').trim().slice(0, 30)).filter(Boolean))].slice(0, 200)
-  await q(
-    `insert into ${tq('gateway_meta')} (key, value) values ('blocked_words', $1)
-     on conflict (key) do update set value = $1`,
-    [JSON.stringify(words)],
-  )
-  extraBlockedWords = words
-  secEvent('word_filter_updated', { actorSid: auth.id, detail: { count: words.length } })
-  return { defaults: DEFAULT_BLOCKED_WORDS, words }
-}
-
-async function handleAuthWithPassword(body, ip) {
-  const parsed = vparse(AuthBody, body)
-  const identity = parsed.identity.toLowerCase()
-  assertNotLocked(identity, ip)
-  const r = await q(`select * from ${tq('users')} where lower(email) = $1`, [identity])
-  const user = r.rows[0]
-  if (!user || !user.password_hash || !bcrypt.compareSync(parsed.password, user.password_hash)) {
-    noteAuthFail(identity, ip)
-    throw new HttpErr(400, 'Failed to authenticate.')
-  }
-  // 密码正确但已停用：拒绝登录（v1.6 服务端强制，此前只在客户端过滤）
-  const prof = await q(`select banned from ${tq('profiles')} where sid = $1 limit 1`, [user.id])
-  if (prof.rows[0]?.banned) throw new HttpErr(403, '账号已停用，如有疑问请联系掌柜')
-  AUTH_FAILS.delete(identity)
-  secEvent('login_success', { actorSid: user.id, identity, ip })
-  const token = signToken({
-    id: user.id,
-    type: 'auth',
-    collectionId: colIdOf('users'),
-    collectionName: 'users',
-    refreshable: true,
-    pv: pwFingerprint(user.password_hash),
-    exp: Math.floor(Date.now() / 1000) + 14 * 86400,
-  })
-  return { token, record: toRecord('users', user) }
-}
-
-async function handleAuthRefresh(auth) {
-  needAuth(auth)
-  const r = await q(`select * from ${tq('users')} where id = $1`, [auth.id])
-  if (!r.rows[0]) throw new HttpErr(400, 'Failed to authenticate.')
-  const token = signToken({
-    id: auth.id,
-    type: 'auth',
-    collectionId: colIdOf('users'),
-    collectionName: 'users',
-    refreshable: true,
-    pv: pwFingerprint(r.rows[0].password_hash),
-    exp: Math.floor(Date.now() / 1000) + 14 * 86400,
-  })
-  return { token, record: toRecord('users', r.rows[0]) }
 }
 
 /** 精选浏览计数：登录成员触发，服务端原子自增（客户端不再整行覆写 views） */
@@ -995,54 +1326,141 @@ async function handleDigestView(sidOrId, auth) {
   return toRecord('digests', r.rows[0])
 }
 
+function normalizeFavoriteGroupName(value, required = true) {
+  const name = String(value ?? '').trim()
+  if (!name && !required) return ''
+  if (!name) throw new HttpErr(400, 'Validation failed.', { name: { message: '给分组起个名字吧' } })
+  if ([...name].length > 6) throw new HttpErr(400, 'Validation failed.', { name: { message: '分组名至多 6 个字' } })
+  return name
+}
+
+/** 收藏分组原子操作：新增 / 删除 / 重命名 / 分配均在服务端事务内完成。 */
+async function handleFavoriteGroupAction(body, auth) {
+  needAuth(auth)
+  const action = String(body?.action ?? '')
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await client.query(`select id from ${tq('users')} where id = $1 for update`, [auth.id])
+
+    if (action === 'add') {
+      const name = normalizeFavoriteGroupName(body?.name)
+      const cnt = await client.query(`select count(*)::int n from ${tq('fav_groups')} where owner_sid = $1`, [auth.id])
+      if (Number(cnt.rows[0]?.n ?? 0) >= 6) throw new HttpErr(400, 'Validation failed.', { name: { message: '至多 6 个分组' } })
+      const dup = await client.query(`select 1 from ${tq('fav_groups')} where owner_sid = $1 and name = $2 limit 1`, [auth.id, name])
+      if (dup.rows[0]) throw new HttpErr(400, 'Validation failed.', { name: { message: '已有同名分组' } })
+      await client.query(
+        `insert into ${tq('fav_groups')} (id, sid, owner_sid, name, created, updated) values ($1,$2,$3,$4,now(),now())`,
+        [genId(), `${auth.id}:${name}`, auth.id, name],
+      )
+    } else if (action === 'remove') {
+      const name = normalizeFavoriteGroupName(body?.name)
+      await client.query(`update ${tq('favorites')} set group_name = '', updated = now() where owner_sid = $1 and group_name = $2`, [auth.id, name])
+      await client.query(`delete from ${tq('fav_groups')} where owner_sid = $1 and name = $2`, [auth.id, name])
+    } else if (action === 'rename') {
+      const oldName = normalizeFavoriteGroupName(body?.name)
+      const newName = normalizeFavoriteGroupName(body?.newName)
+      if (oldName !== newName) {
+        const old = await client.query(`select id from ${tq('fav_groups')} where owner_sid = $1 and name = $2 limit 1`, [auth.id, oldName])
+        if (!old.rows[0]) throw new HttpErr(404, '收藏分组不存在或已删除')
+        const dup = await client.query(`select 1 from ${tq('fav_groups')} where owner_sid = $1 and name = $2 limit 1`, [auth.id, newName])
+        if (dup.rows[0]) throw new HttpErr(400, 'Validation failed.', { name: { message: '已有同名分组' } })
+        await client.query(`update ${tq('favorites')} set group_name = $3, updated = now() where owner_sid = $1 and group_name = $2`, [auth.id, oldName, newName])
+        await client.query(`update ${tq('fav_groups')} set sid = $3, name = $4, updated = now() where id = $2 and owner_sid = $1`, [auth.id, old.rows[0].id, `${auth.id}:${newName}`, newName])
+      }
+    } else if (action === 'assign') {
+      const type = String(body?.type ?? '')
+      const targetId = String(body?.targetId ?? '').trim()
+      const group = normalizeFavoriteGroupName(body?.group, false)
+      if (!['users', 'posts', 'events'].includes(type) || !targetId) throw new HttpErr(400, 'Validation failed.', { favorite: { message: '收藏对象无效' } })
+      if (group) {
+        const exists = await client.query(`select 1 from ${tq('fav_groups')} where owner_sid = $1 and name = $2 limit 1`, [auth.id, group])
+        if (!exists.rows[0]) throw new HttpErr(400, 'Validation failed.', { group: { message: '收藏分组不存在' } })
+      }
+      const updated = await client.query(
+        `update ${tq('favorites')} set group_name = $4, updated = now() where owner_sid = $1 and fav_type = $2 and target_sid = $3 returning id`,
+        [auth.id, type, targetId, group],
+      )
+      if (!updated.rows[0]) throw new HttpErr(404, '收藏记录不存在或已取消')
+    } else {
+      throw new HttpErr(400, 'Validation failed.', { action: { message: '收藏分组操作无效' } })
+    }
+
+    await client.query('commit')
+    return { ok: true }
+  } catch (e) {
+    try { await client.query('rollback') } catch { /* 已断开 */ }
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
 /**
  * 掌柜重置会员密码（v1.6 补齐账号找回路径）：
  * 生成一次性临时密码（去易混淆字符），落库为哈希，明文只在本次响应返回。
  * 服务端日志留痕重置事件（不含明文）；运营日志由前端掌柜侧补记。
  */
-async function handleAdminResetPassword(idOrEmail, auth) {
-  needAuth(auth)
-  if (auth.role !== 'admin') throw new HttpErr(403, 'You are not allowed to perform this operation.')
-  const r = await q(`select id, email from ${tq('users')} where id = $1 or lower(email) = lower($1) limit 1`, [idOrEmail])
-  const user = r.rows[0]
-  if (!user) throw new HttpErr(404, 'The requested resource wasn\'t found.')
-  const alpha = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
-  let temp = ''
-  for (let i = 0; i < 12; i++) temp += alpha[crypto.randomInt(alpha.length)]
-  await q(`update ${tq('users')} set password_hash = $1, updated = now() where id = $2`, [bcrypt.hashSync(temp, 10), user.id])
-  METRICS.passwordResets += 1
-  console.log(`admin-reset-password: target=${user.id} by=${auth.id}`)
-  secEvent('password_reset', { actorSid: auth.id, identity: user.email, detail: { target: user.id } })
-  return { tempPassword: temp }
-}
-
 // ---------- v1.8 图片上传（附件落盘，不再以 dataURL 挤占数据库与同步载荷） ----------
 
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
+const UPLOAD_DIR = path.resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads')
 const UPLOAD_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' }
 const UPLOAD_MAX_BYTES = 8e6 // 解码后上限；前端已压缩到最长边 600–900 的 JPEG，正常 <400KB
+const UPLOAD_PURPOSES = new Set(['profile', 'post', 'event', 'chat', 'admin'])
 
-/** 登录成员上传：dataURL -> 落盘文件，返回不可猜测的访问路径（凭 URL 访问语义） */
+function uploadCapabilitySig(name) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(`upload:${name}`).digest('base64url').slice(0, 32)
+}
+
+function safeSigEqual(actual, expected) {
+  const a = Buffer.from(String(actual ?? ''))
+  const b = Buffer.from(String(expected ?? ''))
+  return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b)
+}
+
+function validImageMagic(buf, mime) {
+  if (mime === 'image/jpeg') return buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+  if (mime === 'image/png') return buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))
+  if (mime === 'image/gif') return buf.length >= 6 && ['GIF87a', 'GIF89a'].includes(buf.subarray(0, 6).toString('ascii'))
+  if (mime === 'image/webp') return buf.length >= 12 && buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP'
+  return false
+}
+
+/** 登录成员上传：用途分类 + 不可猜文件名 + HMAC capability URL。 */
 async function handleUpload(body, auth) {
   needAuth(auth)
+  const purpose = String(body?.purpose ?? '').trim()
+  if (!UPLOAD_PURPOSES.has(purpose)) {
+    throw new HttpErr(400, 'Validation failed.', { purpose: { message: '图片用途无效' } })
+  }
   const data = String(body?.image ?? '')
   const m = data.match(/^data:([a-z/+-]+);base64,([A-Za-z0-9+/=\s]+)$/i)
-  const ext = m ? UPLOAD_TYPES[m[1].toLowerCase()] : null
+  const mime = m ? m[1].toLowerCase() : ''
+  const ext = m ? UPLOAD_TYPES[mime] : null
   if (!ext) throw new HttpErr(400, 'Validation failed.', { image: { message: '仅支持 jpeg / png / webp / gif 图片' } })
   const buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64')
   if (!buf.length) throw new HttpErr(400, 'Validation failed.', { image: { message: '图片内容为空' } })
   if (buf.length > UPLOAD_MAX_BYTES) throw new HttpErr(413, '图片过大（上限 8MB）')
+  if (!validImageMagic(buf, mime)) throw new HttpErr(400, 'Validation failed.', { image: { message: '图片内容与格式不一致' } })
   fs.mkdirSync(UPLOAD_DIR, { recursive: true })
-  const name = `${Date.now().toString(36)}-${crypto.randomBytes(12).toString('hex')}${ext}`
-  await fs.promises.writeFile(path.join(UPLOAD_DIR, name), buf)
+  const name = `v2-${purpose}-${Date.now().toString(36)}-${crypto.randomBytes(12).toString('hex')}${ext}`
+  await fs.promises.writeFile(path.join(UPLOAD_DIR, name), buf, { flag: 'wx' })
   METRICS.uploads.count += 1
   METRICS.uploads.bytes += buf.length
-  return { url: `/api/uploads/${name}`, bytes: buf.length }
+  secEvent('image_uploaded', { actorSid: auth.id, detail: { purpose, bytes: buf.length } })
+  const sig = uploadCapabilitySig(name)
+  return { url: `/api/uploads/${name}?sig=${encodeURIComponent(sig)}`, bytes: buf.length, purpose }
 }
 
-/** 读上传文件：文件名只允许本脚本生成的形态，杜绝路径穿越 */
-function handleUploadRead(name, res) {
-  if (!/^[a-z0-9]+-[a-f0-9]{24}\.(jpg|png|webp|gif)$/.test(name)) {
+/**
+ * 读上传文件：仅允许 v2 capability URL。
+ * 2026-09-28 已确认 public 数据库旧引用为 0，legacy unsigned fallback 正式关闭；
+ * 磁盘上即使仍残留旧文件，也不再通过 HTTP 暴露。
+ */
+function handleUploadRead(name, url, res) {
+  const v2 = /^v2-(profile|post|event|chat|admin)-[a-z0-9]+-[a-f0-9]{24}\.(jpg|png|webp|gif)$/.test(name)
+  if (!v2) throw new HttpErr(404, 'The requested resource wasn\'t found.')
+  if (!safeSigEqual(url.searchParams.get('sig'), uploadCapabilitySig(name))) {
     throw new HttpErr(404, 'The requested resource wasn\'t found.')
   }
   const fp = path.join(UPLOAD_DIR, name)
@@ -1052,8 +1470,9 @@ function handleUploadRead(name, res) {
   res.writeHead(200, {
     'Content-Type': type,
     'Content-Length': size,
-    'Cache-Control': 'public, max-age=31536000, immutable',
-    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
   })
   fs.createReadStream(fp).pipe(res)
 }
@@ -1064,9 +1483,14 @@ function send(res, status, body) {
   const payload = body === null ? null : JSON.stringify(body)
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Pb-Auth',
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store',
+    // Standalone production UI/API share an origin; wildcard CORS is unnecessary there.
+    ...(!SERVE_STATIC ? {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Pb-Auth',
+    } : {}),
     ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
   })
   res.end(payload ?? '')
@@ -1099,9 +1523,20 @@ async function readBody(req) {
 const server = http.createServer(async (req, res) => {
   const t0 = Date.now()
   const url = new URL(req.url, 'http://localhost')
-  const path = url.pathname
+  const path = SERVE_STATIC && (url.pathname === '/__pb/api' || url.pathname.startsWith('/__pb/api/'))
+    ? url.pathname.slice('/__pb'.length) : url.pathname
   try {
+    if (staticSite && staticSite(req, res, path)) return
     if (req.method === 'OPTIONS') return send(res, 204, null)
+
+    if ((path === '/api/ready' || path === '/api/ready/') && req.method === 'GET') {
+      // Readiness validates the DB connection and auth bootstrap, unlike shallow liveness.
+      await q('select 1')
+      if (!JWT_SECRET || !COLUMNS.has('users') || !COLUMNS.has('profiles')) {
+        throw new HttpErr(503, '数据服务尚未完成启动')
+      }
+      return send(res, 200, { code: 200, message: 'API is ready.', data: { ready: true } })
+    }
 
     if (path === '/api/health' || path === '/api/health/') {
       // deep=1 时探活数据库连接（运维/监控用），DB 故障会自然落到 500
@@ -1118,16 +1553,80 @@ const server = http.createServer(async (req, res) => {
 
     const auth = await resolveAuth(req)
 
+    if ((path === '/api/profiles/lookup' || path === '/api/profiles/lookup/') && req.method === 'GET') {
+      return send(res, 200, await handleProfileLookup(url, auth))
+    }
+
+    if ((path === '/api/discovery/profiles' || path === '/api/discovery/profiles/') && req.method === 'GET') {
+      return send(res, 200, await handleDiscoveryProfiles(url, auth))
+    }
+
+    if ((path === '/api/community/posts' || path === '/api/community/posts/') && req.method === 'GET') {
+      return send(res, 200, await handleCommunityPosts(url, auth))
+    }
+    if ((path === '/api/community/digests' || path === '/api/community/digests/') && req.method === 'GET') {
+      return send(res, 200, await handleCommunityDigests(auth))
+    }
+
+    if ((path === '/api/events/list' || path === '/api/events/list/') && req.method === 'GET') {
+      return send(res, 200, await eventHandlers.handleEventList(url, auth))
+    }
+    if ((path === '/api/me/activity-stats' || path === '/api/me/activity-stats/') && req.method === 'GET') {
+      return send(res, 200, await eventHandlers.handleMyActivityStats(auth))
+    }
+    if ((path === '/api/me/visits' || path === '/api/me/visits/') && req.method === 'GET') {
+      return send(res, 200, await handleMyVisits(url, auth))
+    }
+    if ((path === '/api/me/chat-activity' || path === '/api/me/chat-activity/') && req.method === 'GET') {
+      return send(res, 200, await handleChatActivity(url, auth))
+    }
+    let relationshipFeedbackMatch = path.match(/^\/api\/me\/relationship-feedback\/([^/]+)\/?$/)
+    if (relationshipFeedbackMatch && req.method === 'GET') {
+      return send(res, 200, await handleRelationshipFeedback(decodeURIComponent(relationshipFeedbackMatch[1]), auth))
+    }
+    if (relationshipFeedbackMatch && req.method === 'PUT') {
+      return send(res, 200, await handleRelationshipFeedbackSet(decodeURIComponent(relationshipFeedbackMatch[1]), await readBody(req), auth))
+    }
+    if ((path === '/api/me/reports' || path === '/api/me/reports/') && req.method === 'GET') {
+      return send(res, 200, await safetyHandlers.handleMyReports(auth))
+    }
+    let eventDetailMatch = path.match(/^\/api\/events\/([^/]+)\/detail\/?$/)
+    if (eventDetailMatch && req.method === 'GET') {
+      return send(res, 200, await eventHandlers.handleEventDetail(decodeURIComponent(eventDetailMatch[1]), auth))
+    }
+
+    if ((path === '/api/chats/summaries' || path === '/api/chats/summaries/') && req.method === 'GET') {
+      return send(res, 200, await handleChatSummaries(auth))
+    }
+    let chatConversationMatch = path.match(/^\/api\/chats\/([^/]+)\/messages\/?$/)
+    if (chatConversationMatch && req.method === 'GET') {
+      return send(res, 200, await handleChatConversation(decodeURIComponent(chatConversationMatch[1]), auth))
+    }
+
+    if ((path === '/api/favorites/groups' || path === '/api/favorites/groups/') && req.method === 'POST') {
+      return send(res, 200, await handleFavoriteGroupAction(await readBody(req), auth))
+    }
+
+    // 活动现场核销：主办方取码，报名成员凭码签到。
+    let checkinMatch = path.match(/^\/api\/events\/([^/]+)\/checkin-code\/?$/)
+    if (checkinMatch && req.method === 'GET') {
+      return send(res, 200, await eventHandlers.handleEventCheckinCode(decodeURIComponent(checkinMatch[1]), auth))
+    }
+    checkinMatch = path.match(/^\/api\/events\/([^/]+)\/checkin\/?$/)
+    if (checkinMatch && req.method === 'POST') {
+      return send(res, 200, await eventHandlers.handleEventCheckin(decodeURIComponent(checkinMatch[1]), await readBody(req), auth))
+    }
+
     // 认证接口（另加单 IP 尝试频次限制，防爆破的第一道闸；身份级锁定见 handleAuthWithPassword）
     let m = path.match(/^\/api\/collections\/users\/auth-with-password\/?$/)
     if (m && req.method === 'POST') {
       rateGate(`a:${ip}`, 60, 600_000, '尝试次数过多，请稍后再试')
-      const out = await handleAuthWithPassword(await readBody(req), ip)
+      const out = await authHandlers.handleAuthWithPassword(await readBody(req), ip)
       return send(res, 200, out)
     }
     m = path.match(/^\/api\/collections\/users\/auth-refresh\/?$/)
     if (m && req.method === 'POST') {
-      const out = await handleAuthRefresh(auth)
+      const out = await authHandlers.handleAuthRefresh(auth)
       return send(res, 200, out)
     }
 
@@ -1141,19 +1640,28 @@ const server = http.createServer(async (req, res) => {
     // 掌柜重置会员密码（仅 admin，返回一次性临时密码）
     m = path.match(/^\/api\/admin\/users\/([^/]+)\/reset-password\/?$/)
     if (m && req.method === 'POST') {
-      const out = await handleAdminResetPassword(decodeURIComponent(m[1]), auth)
+      const out = await adminHandlers.handleAdminResetPassword(decodeURIComponent(m[1]), auth)
       return send(res, 200, out)
+    }
+
+    m = path.match(/^\/api\/admin\/reports\/([^/]+)\/resolve\/?$/)
+    if (m && req.method === 'POST') {
+      return send(res, 200, await safetyHandlers.handleAdminResolveReport(decodeURIComponent(m[1]), await readBody(req), auth))
+    }
+    m = path.match(/^\/api\/reports\/([^/]+)\/appeal\/?$/)
+    if (m && req.method === 'POST') {
+      return send(res, 200, await safetyHandlers.handleReportAppeal(decodeURIComponent(m[1]), await readBody(req), auth))
     }
 
     // 安全事件查询（仅掌柜；v1.12）
     if ((path === '/api/admin/security-events' || path === '/api/admin/security-events/') && req.method === 'GET') {
-      return send(res, 200, await handleAdminSecurityEvents(url, auth))
+      return send(res, 200, await safetyHandlers.handleAdminSecurityEvents(url, auth))
     }
 
     // 敏感词表维护（仅掌柜；v1.12）
     if ((path === '/api/admin/word-filter' || path === '/api/admin/word-filter/') && (req.method === 'GET' || req.method === 'PUT')) {
       const body = req.method === 'PUT' ? await readBody(req) : null
-      return send(res, 200, await handleAdminWordFilter(req, body, auth))
+      return send(res, 200, await safetyHandlers.handleAdminWordFilter(req, body, auth))
     }
 
     // 图片上传（登录成员）与读取（文件名不可猜测，凭 URL 访问）
@@ -1162,25 +1670,16 @@ const server = http.createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/uploads\/([^/]+)$/)
     if (m && req.method === 'GET') {
-      handleUploadRead(decodeURIComponent(m[1]), res)
+      handleUploadRead(decodeURIComponent(m[1]), url, res)
       return
     }
 
     // 运行指标（仅掌柜；内存计数，重启清零，不含业务数据）
     if ((path === '/api/metrics' || path === '/api/metrics/') && req.method === 'GET') {
-      needAuth(auth)
-      if (auth.role !== 'admin') throw new HttpErr(403, 'You are not allowed to perform this operation.')
-      return send(res, 200, {
-        code: 200,
-        message: 'ok',
-        data: {
-          ...METRICS,
-          uptimeSec: Math.round((Date.now() - METRICS.startedAt) / 1000),
-          avgLatencyMs: METRICS.requests ? Math.round(METRICS.latencyTotalMs / METRICS.requests) : 0,
-          tables: [...COLUMNS.keys()].filter((x) => RULES[x]).length,
-          heapUsedMB: Math.round(process.memoryUsage().heapUsed / 1048576),
-        },
-      })
+      return send(res, 200, adminHandlers.handleMetrics(auth))
+    }
+    if ((path === '/api/admin/pilot-metrics' || path === '/api/admin/pilot-metrics/') && req.method === 'GET') {
+      return send(res, 200, await adminHandlers.handlePilotMetrics(url, auth))
     }
 
     // 记录接口
@@ -1229,13 +1728,28 @@ const server = http.createServer(async (req, res) => {
   }
 })
 
+async function ensureSchemaMigrations() {
+  await q(`alter table if exists ${tq('reports')} add column if not exists resolution text`)
+  await q(`alter table if exists ${tq('reports')} add column if not exists resolved_at double precision`)
+  await q(`alter table if exists ${tq('reports')} add column if not exists appeal_note text`)
+  await q(`alter table if exists ${tq('reports')} add column if not exists appeal_at double precision`)
+  await q(`alter table if exists ${tq('reports')} add column if not exists appeal_status text`)
+}
+
 async function main() {
+  if (SERVE_STATIC) {
+    staticSite = createStaticSiteHandler({ directory: process.env.STATIC_DIR ?? path.resolve(process.cwd(), 'dist') })
+  }
+  // fresh DB 先确保 schema 存在，再执行增量迁移；迁移后重新读取列元数据。
+  await loadColumns()
+  await ensureSchemaMigrations()
   await loadColumns()
   await loadSecret()
+  await bootstrapConfiguredAdmins()
   await loadBlockedWords()
   const tables = [...COLUMNS.keys()].filter((t) => RULES[t])
   console.log(`Neon 网关就绪：${tables.length} 张业务表，schema ${SCHEMA}，端口 ${PORT}`)
-  server.listen(PORT, '0.0.0.0')
+  server.listen(PORT, HOST)
 }
 
 process.on('SIGTERM', () => {

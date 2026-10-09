@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react'
 import { CalendarPlus, ImagePlus, Images, Wand2, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { INTERESTS, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { EventItem } from '@/lib/store'
 import { Modal, Tag } from '@/components/ui'
 import { CityPicker } from '@/components/ui/CityPicker'
 import { FESTS, FEST_TEMPLATE } from '@/lib/festivals'
-import { cn, readImageFile } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { readImageFile } from '@/lib/image-utils'
+import { INTERESTS } from '@/lib/store-model'
 
 interface Props {
   open: boolean
@@ -32,6 +34,10 @@ export function EventForm({ open, initial, onClose }: Props) {
   const [tags, setTags] = useState<string[]>(initial?.tags ?? [])
   const [desc, setDesc] = useState(initial?.desc ?? '')
   const [requirements, setRequirements] = useState(initial?.requirements ?? '')
+  const [venue, setVenue] = useState(initial?.venue ?? '')
+  const [costNote, setCostNote] = useState(initial?.costNote ?? '')
+  const [cancelNote, setCancelNote] = useState(initial?.cancelNote ?? '')
+  const [submitting, setSubmitting] = useState(false)
 
   // 选定日期若逢传统佳节, 提供一键佳节模板(后台定制优先)
   const fest = FESTS[date] ?? ''
@@ -44,7 +50,7 @@ export function EventForm({ open, initial, onClose }: Props) {
       return
     }
     try {
-      setCover(await readImageFile(file))
+      setCover(await readImageFile(file, 'event'))
       toast.success('活动封面已就绪')
     } catch {
       toast.error('图片读取失败,换一张试试')
@@ -72,7 +78,7 @@ export function EventForm({ open, initial, onClose }: Props) {
         continue
       }
       try {
-        const url = await readImageFile(f)
+        const url = await readImageFile(f, 'event')
         setImages(p => (p.length >= 4 ? p : [...p, url]))
       } catch {
         toast.error('有图片读取失败,已跳过')
@@ -101,11 +107,16 @@ export function EventForm({ open, initial, onClose }: Props) {
     toast.success('介绍已润色,可再修改')
   }
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return
     if (!title.trim()) return toast.error('给活动起个名字吧')
     if (!city) return toast.error('选一座城市')
     if (!date || !time) return toast.error('填好日期与时间')
-    const cap = Math.max(2, Math.min(99, Number(capacity) || 12))
+    if (date < new Date().toISOString().slice(0, 10)) return toast.error('活动日期不能早于今天')
+    if (!initial && !venue.trim()) return toast.error('请填写大致集合区域，避免参与者报名后无处可去')
+    if (!initial && !costNote.trim()) return toast.error('请说明是否收费，免费活动请填写“免费”')
+    if (!Number.isInteger(Number(capacity)) || Number(capacity) < 2 || Number(capacity) > 99) return toast.error('人数上限请输入 2–99 的整数')
+    const cap = Number(capacity)
     const data = {
       title: title.trim(),
       city,
@@ -117,26 +128,30 @@ export function EventForm({ open, initial, onClose }: Props) {
       desc: desc.trim() || '发起人暂未写下活动介绍,报名后私下细聊。',
       tags: tags.length ? tags : ['美食'],
       requirements: requirements.trim(),
+      venue: venue.trim(),
+      costNote: costNote.trim(),
+      cancelNote: cancelNote.trim(),
       images,
     }
-    if (initial) {
-      if (updateEvent(initial.id, data)) {
-        toast.success('活动已更新')
-        onClose()
+    setSubmitting(true)
+    try {
+      if (initial) {
+        if (!await updateEvent(initial.id, data)) return toast.error('只有发起人才能修改这场活动')
+        toast.success('活动修改已确认保存')
       } else {
-        toast.error('只有发起人才能修改这场活动')
+        await createEvent(data)
+        toast.success('活动已确认发布,你已成为首位报名者')
       }
-    } else {
-      const id = createEvent(data)
-      if (id) {
-        toast.success('活动已发布,你已自动成为首位报名者')
-        onClose()
-      }
+      onClose()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '活动未保存成功,表单内容已保留')
+    } finally {
+      setSubmitting(false)
     }
   }
 
   return (
-    <Modal open={open} onClose={onClose} wide>
+    <Modal open={open} onClose={() => !submitting && onClose()} wide>
       <div className="space-y-4 p-5 md:p-6">
         <h3 className="flex items-center gap-2 font-xing text-2xl text-foreground">
           <CalendarPlus size={18} className="text-gold" />
@@ -162,12 +177,25 @@ export function EventForm({ open, initial, onClose }: Props) {
           </div>
           <div>
             <label className="mb-1 block text-xs tracking-widest text-muted-foreground">日期</label>
-            <input className="input-cn" type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <input className="input-cn" type="date" min={new Date().toISOString().slice(0, 10)} value={date} onChange={e => setDate(e.target.value)} />
           </div>
           <div>
             <label className="mb-1 block text-xs tracking-widest text-muted-foreground">时间</label>
             <input className="input-cn" type="time" value={time} onChange={e => setTime(e.target.value)} />
           </div>
+        </div>
+        <div className="space-y-3 rounded-lg border border-gold/35 bg-gold/5 p-4">
+          <h4 className="text-sm font-semibold text-foreground">出席前的重要信息</h4>
+          <label className="block text-xs text-muted-foreground">公开集合区域{!initial ? '（必填）' : ''} · 不要发布私人住址
+            <input aria-label="公开集合区域" className="input-cn mt-1.5" placeholder="如：杭州市西湖区某公园正门，准确地点报名后通知" maxLength={140} value={venue} onChange={e => setVenue(e.target.value)} />
+          </label>
+          <label className="block text-xs text-muted-foreground">费用说明{!initial ? '（必填，免费请填写免费）' : ''}
+            <input aria-label="活动费用说明" className="input-cn mt-1.5" placeholder="如：免费 / AA 约 50 元 / 场馆票价以现场为准" maxLength={300} value={costNote} onChange={e => setCostNote(e.target.value)} />
+          </label>
+          <label className="block text-xs text-muted-foreground">取消及改期规则（选填）
+            <textarea aria-label="活动取消规则" className="input-cn mt-1.5 min-h-16" placeholder="如：请提前一天取消；如遇恶劣天气将由发起人主动联系报名者" maxLength={500} value={cancelNote} onChange={e => setCancelNote(e.target.value)} />
+          </label>
+          <p className="text-[11px] leading-5 text-muted-foreground">本平台暂不处理活动付款；请勿先向陌生人汇款，相关费用请自行核实。</p>
         </div>
         {festTpl && (
           <div className="flex items-center gap-2.5 rounded-md border border-gold/50 bg-gold/10 px-3 py-2">
@@ -191,7 +219,7 @@ export function EventForm({ open, initial, onClose }: Props) {
           </div>
         )}
         <div>
-          <label className="mb-1 block text-xs tracking-widest text-muted-foreground">活动封面(可选,不传则自动生成)</label>
+          <label className="mb-1 block text-xs tracking-widest text-muted-foreground">活动封面（选填，不上传时使用通用图片）</label>
           <div className="flex items-center gap-3">
             <div className="h-20 w-32 shrink-0 overflow-hidden rounded-md border border-border bg-muted">
               {cover ? (
@@ -299,8 +327,8 @@ export function EventForm({ open, initial, onClose }: Props) {
           />
         </div>
         <div className="grid grid-cols-2 gap-3 pt-1">
-          <button className="btn-outline !py-2.5" onClick={onClose}>先不了</button>
-          <button className={cn('btn-primary !py-2.5')} onClick={submit}>{initial ? '保存修改' : '发布活动'}</button>
+          <button className="btn-outline !py-2.5" disabled={submitting} onClick={onClose}>先不了</button>
+          <button className={cn('btn-primary !py-2.5 disabled:opacity-50')} disabled={submitting} onClick={() => void submit()}>{submitting ? '保存中…' : initial ? '保存修改' : '发布活动'}</button>
         </div>
       </div>
     </Modal>

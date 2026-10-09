@@ -1,4 +1,4 @@
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import { SectionHead } from '@/components/ui'
 
 export function Stories() {

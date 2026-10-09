@@ -1,8 +1,8 @@
 import { defineConfig } from '@playwright/test'
 
-// 发布冒烟：API 全链路跑在一次性隔离 schema 的网关实例上（不碰生产数据），
-// UI 启动检查跑在 8000 页面服务上（只读）。
-// 运行：NEON_DSN='postgresql://…' npx playwright test
+// 发布冒烟：一次性隔离 Neon schema + 正式构建的同源 React/API 网关（7200）。
+// 不再额外启动 7300 Vite 开发服务，避免与实际生产构建产生双服务竞态。
+// 运行：pnpm e2e。需要本地 NEON_DSN 或本机忽略文件，自动启动并清理测试网关。
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,

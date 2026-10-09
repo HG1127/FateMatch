@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Heart, MapPin, MessageCircleHeart, Ruler, Briefcase, Bookmark, Ban, Flag } from 'lucide-react'
 import { toast } from 'sonner'
-import { ageOf, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
 import { regionOf } from '@/lib/region'
+import { ageOf } from '@/lib/store-model'
 import { MatchRing, Modal, VerifyBadges } from '@/components/ui'
 import { ReportDialog } from '@/components/safety/ReportDialog'
 import { PostDialog } from '@/components/community/PostDialog'
@@ -21,12 +22,17 @@ const FATE_SLIPS = [
 import { cn } from '@/lib/utils'
 
 export function DetailDialog({ user, onClose }: { user: User | null; onClose: () => void }) {
-  const { me, matchScore, matchParts, like, isMutual, isFav, toggleFav, recordVisit, isBlocked, toggleBlock, match, posts } = useStore()
+  const { me, matchScore, matchParts, like, unlike, isMutual, isFav, toggleFav, recordVisit, isBlocked, toggleBlock, match, posts } = useStore()
   const nav = useNavigate()
   const [pic, setPic] = useState(0)
   const [reportOpen, setReportOpen] = useState(false)
   const [postId, setPostId] = useState('')
   const [showAllPosts, setShowAllPosts] = useState(false)
+  const [liking, setLiking] = useState(false)
+  const recordVisitRef = useRef(recordVisit)
+  useEffect(() => {
+    recordVisitRef.current = recordVisit
+  }, [recordVisit])
 
   const viewedId = user?.id ?? ''
   // 切换查看对象时收起「全部分享」: 渲染期调整 state, 免 effect 级联渲染
@@ -35,9 +41,9 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
     setSeenViewedId(viewedId)
     setShowAllPosts(false)
   }
-  // 记录到访属于对外部 store 的同步, 留在 effect 里 (recordVisit 每次渲染都是新引用, 加入依赖会造成循环记录)
+  // 只在查看对象变化时记录一次；ref 始终指向最新 store action，避免函数引用变化制造重复到访。
   useEffect(() => {
-    if (viewedId) recordVisit(viewedId)
+    if (viewedId) void recordVisitRef.current(viewedId).catch(() => {})
   }, [viewedId])
 
   if (!user || !me) return null
@@ -53,7 +59,7 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
     <Modal open onClose={onClose} wide>
       <div className="grid md:grid-cols-2">
         <div className="p-4 md:p-5">
-          <img src={photos[Math.min(pic, photos.length - 1)]} alt={user.nickname} className="aspect-[3/4] w-full rounded-md border border-border object-cover" />
+          {photos.length > 0 ? <img src={photos[Math.min(pic, photos.length - 1)]} alt={user.nickname} className="aspect-[3/4] w-full rounded-md border border-border object-cover" /> : <div className="flex aspect-[3/4] items-center justify-center rounded-md border border-border bg-secondary text-sm text-muted-foreground">对方尚未上传照片</div>}
           {photos.length > 1 && (
             <div className="mt-2 flex gap-2 overflow-x-auto">
               {photos.map((p, i) => (
@@ -85,8 +91,9 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
                   faved ? 'border-gold bg-gold/10 text-gold' : 'border-border text-muted-foreground hover:border-gold/60 hover:text-gold',
                 )}
                 onClick={() => {
-                  toggleFav('users', user.id)
-                  toast(faved ? '已从收藏夹移出' : '已收藏,可在「我的收藏」里找到 TA')
+                  void toggleFav('users', user.id)
+                    .then(active => toast.success(active ? '已收藏,可在「我的收藏」里找到 TA' : '已从收藏夹移出'))
+                    .catch(e => toast.error(e instanceof Error ? e.message : '收藏状态未保存,请重试'))
                 }}
               >
                 <Bookmark size={12} className={faved ? 'fill-current' : ''} />
@@ -97,7 +104,7 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
           <VerifyBadges v={user.verification} />
           <div className="rounded-md border border-gold/40 bg-gold/10 px-3 py-2">
             <p className="text-xs leading-relaxed text-gold">缘分签 · {slip}</p>
-            <p className="mt-1 text-[10px] text-muted-foreground">签文仅作轻松参考，不会自动代你向对方发送任何内容。</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">仅为趣味文案，并非关系判断或对方的意愿；不会自动发送。</p>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {(() => {
@@ -170,7 +177,11 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
             {blocked ? (
               <div className="rounded-md border border-border bg-secondary/50 p-4 text-center">
                 <p className="text-sm text-muted-foreground">已拉黑此人,不会再向你推荐,也收不到 TA 的消息。</p>
-                <button className="btn-outline mt-3" onClick={() => { toggleBlock(user.id); toast('已解除拉黑') }}>
+                <button className="btn-outline mt-3" onClick={() => {
+                  void toggleBlock(user.id)
+                    .then(active => toast.success(active ? '已重新拉黑' : '已解除拉黑'))
+                    .catch(e => toast.error(e instanceof Error ? e.message : '拉黑状态未保存,请重试'))
+                }}>
                   <Ban size={14} />
                   解除拉黑
                 </button>
@@ -180,16 +191,25 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     className={cn(mutual ? 'btn-gold' : 'btn-primary', '!py-3')}
-                    onClick={() => {
+                    disabled={liking || (iLiked && !mutual)}
+                    onClick={async () => {
                       if (mutual) {
                         toast('你们已互道有意,去佳音里聊聊吧')
                         nav(`/matches?with=${user.id}`)
                         return
                       }
-                      const back = like(user.id)
-                      if (back) toast.success('天作之合!对方也对你有意')
-                      else toast('已道「有意」,静候佳音')
-                      onClose()
+                      if (liking) return
+                      setLiking(true)
+                      try {
+                        const back = await like(user.id)
+                        if (back) toast.success('双方真实「有意」已确认,佳音已结')
+                        else toast.success('「有意」已保存,静候对方真实回应')
+                        onClose()
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : '表达「有意」未保存,请重试')
+                      } finally {
+                        setLiking(false)
+                      }
                     }}
                   >
                     <Heart size={16} className={(mutual || iLiked) ? 'fill-current' : ''} />
@@ -208,13 +228,35 @@ export function DetailDialog({ user, onClose }: { user: User | null; onClose: ()
                     {mutual ? '去佳音聊聊' : '互道有意后可聊天'}
                   </button>
                 </div>
+                {iLiked && !mutual && (
+                  <button
+                    className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline disabled:opacity-50"
+                    disabled={liking}
+                    onClick={async () => {
+                      setLiking(true)
+                      try {
+                        await unlike(user.id)
+                        toast.success('已撤回对 TA 的有意')
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : '撤回未成功，请重试')
+                      } finally {
+                        setLiking(false)
+                      }
+                    }}
+                  >撤回已表达的有意</button>
+                )}
                 <div className="flex items-center justify-center gap-2 text-[11px]">
                   <button
                     className="inline-flex items-center gap-1 text-muted-foreground transition hover:text-primary"
                     onClick={() => {
-                      toggleBlock(user.id)
-                      toast('已拉黑,世界清静了')
-                      onClose()
+                      void toggleBlock(user.id)
+                        .then(active => {
+                          if (active) {
+                            toast.success('已拉黑,世界清静了')
+                            onClose()
+                          }
+                        })
+                        .catch(e => toast.error(e instanceof Error ? e.message : '拉黑未保存,请重试'))
                     }}
                   >
                     <Ban size={11} />

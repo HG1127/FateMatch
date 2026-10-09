@@ -1,0 +1,36 @@
+name: Full-stack Quality Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Unit regression
+        run: pnpm test
+      - name: Build + typecheck
+        run: pnpm build
+      - name: Gateway syntax
+        run: node --check server/neon-gateway.mjs
+      - name: Discover Playwright tests without connecting to Neon
+        run: pnpm exec playwright test --list

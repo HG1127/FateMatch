@@ -1,5 +1,5 @@
 import { BadgeCheck } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 
 function DoneNote({ text }: { text: string }) {
   return (

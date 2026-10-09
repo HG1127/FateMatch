@@ -92,6 +92,16 @@ function errLogPlugin() {
   }
 }
 
+const localFullstackProxy = process.env.LOCAL_FULLSTACK === '1'
+  ? {
+      '/__pb': {
+        target: process.env.LOCAL_GATEWAY_URL ?? 'http://127.0.0.1:7000',
+        changeOrigin: true,
+        rewrite: (p: string) => p.replace(/^\/__pb/, ''),
+      },
+    }
+  : undefined
+
 export default defineConfig({
   // 预览可能挂在任意路径前缀下, 资源一律走相对路径
   base: './',
@@ -105,14 +115,22 @@ export default defineConfig({
     allowedHosts: ['.runninghub.cn', '.vibex.cn'],
     host: '0.0.0.0',
     port: 8000,
-    strictPort: true,
+    // VibeX 原始模式仍严格使用 8000；本地全栈模式允许自动顺延端口。
+    strictPort: !localFullstackProxy,
+    ...(localFullstackProxy ? { proxy: localFullstackProxy } : {}),
   },
   preview: {
     host: '0.0.0.0',
     port: 8000,
+    ...(localFullstackProxy ? { proxy: localFullstackProxy } : {}),
   },
   // vitest: e2e/ 是 Playwright 发布冒烟的地盘(由 pnpm e2e 单独跑), 单测只扫 src
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
+    // 当前测试包含多个 jsdom/React 文件；复用 worker 环境可避免每个文件单独启动重型隔离进程，
+    // 在本地 Runner/CI 上显著降低启动争用。各测试文件负责 cleanup / unstub，保持状态边界。
+    pool: 'threads',
+    fileParallelism: false,
+    isolate: false,
   },
 })

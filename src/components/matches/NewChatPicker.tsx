@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
 import { regionOf } from '@/lib/region'
 import { AvatarFrame, MatchRing, Modal } from '@/components/ui'

@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, BarChart3, BookMarked, Check, Database, Download, Feather, ImagePlus, Pencil, RotateCcw, Settings2, ShieldAlert, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { DEFAULT_SETTINGS, FEATURE_META, readImageFile, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { PostComment, Settings, Story } from '@/lib/store'
 import { countTables, exportBackup } from '@/lib/dataExport'
 import type { DataStat } from '@/lib/dataExport'
-import { fetchSecurityEvents, fetchWordFilter, saveWordFilter } from '@/lib/repo'
-import type { SecurityEvent } from '@/lib/repo'
+import { fetchPilotMetrics, fetchSecurityEvents, fetchWordFilter, saveWordFilter } from '@/lib/repo'
+import type { PilotMetrics, SecurityEvent } from '@/lib/repo'
 import { FESTS, FEST_TEMPLATE } from '@/lib/festivals'
 import type { FestTemplate } from '@/lib/festivals'
+import { DEFAULT_SETTINGS, FEATURE_META } from '@/lib/store-model'
 import { Modal } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { readImageFile } from '@/lib/image-utils'
 
 const FEST_NAMES = [...new Set(Object.values(FESTS))]
 
@@ -53,7 +55,7 @@ function loadDigestDraft(): DigestDraft | null {
 }
 
 export function AdminPage() {
-  const { me, settings, saveSettings, events, posts, users, togglePostFeatured, removePost, reports, resolveReport, match, unbanUser, banUser, resetMemberPassword, adminLogs, digests, publishDigest, removeDigest, adminSetUserPhoto, adminSetEventCover, adminSetPostImages, deleteEventComment, removeComment, adminEditPostText, purgeChatImages } = useStore()
+  const { me, settings, saveSettings, events, posts, users, togglePostFeatured, removePost, reports, resolveReport, match, unbanUser, banUser, resetMemberPassword, adminLogs, digests, publishDigest, removeDigest, adminSetUserPhoto, adminSetEventCover, adminSetPostImages, deleteEventComment, removeComment, adminEditPostText } = useStore()
   const [draft, setDraft] = useState<Settings>(() => structuredClone(settings))
   const [confirmBan, setConfirmBan] = useState('')
   const [digestTitle, setDigestTitle] = useState(() => loadDigestDraft()?.title ?? '')
@@ -131,7 +133,6 @@ export function AdminPage() {
   const [commentEventId, setCommentEventId] = useState('')
   const [editPostId, setEditPostId] = useState('')
   const [editPostText, setEditPostText] = useState('')
-  const [confirmPurge, setConfirmPurge] = useState(false)
   // 安全页签: 服务端安全事件日志 + 敏感词表管理 (v1.12)
   const [secEvents, setSecEvents] = useState<SecurityEvent[] | null>(null)
   const [secBusy, setSecBusy] = useState(false)
@@ -139,6 +140,19 @@ export function AdminPage() {
   const [wordCustom, setWordCustom] = useState('')
   const [wordLoaded, setWordLoaded] = useState(false)
   const secTried = useRef(false)
+  // 真实试点观测：只读取服务端聚合指标，不下发逐人推荐曝光明细。
+  const [pilotMetrics, setPilotMetrics] = useState<PilotMetrics | null>(null)
+  const [pilotBusy, setPilotBusy] = useState(true)
+  const [pilotError, setPilotError] = useState('')
+  const pilotTried = useRef(false)
+  const reloadPilotMetrics = () => {
+    setPilotBusy(true)
+    setPilotError('')
+    fetchPilotMetrics(7)
+      .then(setPilotMetrics)
+      .catch(() => setPilotError('试点指标暂时读取失败'))
+      .finally(() => setPilotBusy(false))
+  }
   const loadSecEvents = async () => {
     setSecBusy(true)
     try {
@@ -170,6 +184,14 @@ export function AdminPage() {
         .catch(() => setWordLoaded(true))
     }
   }, [tab, secEvents, secBusy, wordLoaded])
+  useEffect(() => {
+    if (tab !== 'overview' || pilotTried.current) return
+    pilotTried.current = true
+    fetchPilotMetrics(7)
+      .then(setPilotMetrics)
+      .catch(() => setPilotError('试点指标暂时读取失败'))
+      .finally(() => setPilotBusy(false))
+  }, [tab])
   // 数据维护: 各表条数盘点 + JSON 备份导出
   const [dataStats, setDataStats] = useState<DataStat[] | null>(null)
   const [dataBusy, setDataBusy] = useState(false)
@@ -191,11 +213,11 @@ export function AdminPage() {
     }
     try {
       const max = t.kind === 'user' ? 250 : t.kind === 'post' ? 500 : 700
-      const url = await readImageFile(file, max)
+      const url = await readImageFile(file, max, t.kind === 'user' ? 'profile' : t.kind === 'post' ? 'post' : 'event')
       if (t.kind === 'user') {
-        if (adminSetUserPhoto(t.id, url)) toast.success('头像已更换,全站即时生效')
+        if (await adminSetUserPhoto(t.id, url)) toast.success('头像已更换并确认保存')
       } else if (t.kind === 'event') {
-        if (adminSetEventCover(t.id, url)) toast.success('封面已更换,即时展示')
+        if (await adminSetEventCover(t.id, url)) toast.success('封面已更换并确认保存')
       } else {
         const p = posts.find(x => x.id === t.id)
         if (!p) return
@@ -203,15 +225,15 @@ export function AdminPage() {
           toast('一条帖子至多 9 张图')
           return
         }
-        if (adminSetPostImages(t.id, [...p.images, url])) toast.success('图片已添加,社区即时展示')
+        if (await adminSetPostImages(t.id, [...p.images, url])) toast.success('图片已添加并确认保存')
       }
-    } catch {
-      toast.error('图片读取失败,换一张试试')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '图片未保存成功,请重试')
     }
   }
 
   // 留言/回帖行渲染: 带二次确认的删除
-  const commentRow = (name: string | undefined, c: PostComment, onDelete: () => boolean, delMsg: string) => (
+  const commentRow = (name: string | undefined, c: PostComment, onDelete: () => Promise<boolean>, delMsg: string) => (
     <div key={c.id} className="flex items-start gap-2 rounded bg-card px-2.5 py-2">
       <div className="min-w-0 flex-1">
         <p className="cjk-latin text-[11px] text-muted-foreground">{name ?? '已注销会员'} · {new Date(c.at).toLocaleString()}</p>
@@ -222,10 +244,13 @@ export function AdminPage() {
           <button
             className="btn-primary !px-2.5 !py-1 text-[11px]"
             onClick={() => {
-              if (onDelete()) {
-                toast.success(delMsg)
-                setConfirmCommentDel('')
-              }
+              void onDelete()
+                .then(ok => {
+                  if (!ok) return toast.error('当前操作无权限或记录已不存在')
+                  toast.success(delMsg)
+                  setConfirmCommentDel('')
+                })
+                .catch(e => toast.error(e instanceof Error ? e.message : '删除未保存,请重试'))
             }}
           >
             确认删除
@@ -253,7 +278,7 @@ export function AdminPage() {
   useEffect(() => {
     if (JSON.stringify(draft) === JSON.stringify(settings)) return
     const t = setTimeout(() => {
-      saveSettings(draft)
+      void saveSettings(draft).catch(e => toast.error(e instanceof Error ? e.message : '站点设置未保存,请重试'))
     }, 800)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,7 +357,7 @@ export function AdminPage() {
       return
     }
     try {
-      const url = await readImageFile(file)
+      const url = await readImageFile(file, 900, 'admin')
       patchStory(i, { img: url })
       toast.success('图片已就绪,记得保存')
     } catch {
@@ -351,7 +376,7 @@ export function AdminPage() {
         continue
       }
       try {
-        const url = await readImageFile(f)
+        const url = await readImageFile(f, 900, 'admin')
         setDigestCovers(p => (p.length >= 4 ? p : [...p, url]))
       } catch {
         toast.error('有图片读取失败,已跳过')
@@ -372,7 +397,7 @@ export function AdminPage() {
       <div className="mb-8 text-center">
         <p className="text-xs tracking-[.4em] text-gold">系统设置</p>
         <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">掌柜后台</h1>
-        <p className="mt-2 text-sm text-muted-foreground">所有修改稍停即自动保存并存入本地,全站即时生效;无需手动保存</p>
+        <p className="mt-2 text-sm text-muted-foreground">设置变更需经服务端保存后才会生效；处理举报与会员数据时请核对操作结果。</p>
       </div>
 
       <div className="mb-6 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5">
@@ -420,6 +445,75 @@ export function AdminPage() {
         </section>
 
         <section className="card-cn rounded-lg p-5 md:p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-xing text-2xl text-foreground">试点漏斗与曝光公平</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">近 7 日推荐下发按“用户 × 候选 × 来源 × 日期”去重；不记录点击轨迹、停留时长或私信正文。</p>
+            </div>
+            <button className="btn-outline shrink-0 !px-3 !py-1.5 text-[11px]" disabled={pilotBusy} onClick={reloadPilotMetrics}>
+              {pilotBusy ? '汇总中…' : '刷新'}
+            </button>
+          </div>
+          {pilotError ? (
+            <p className="mt-4 rounded-md bg-secondary/40 p-4 text-center text-sm text-muted-foreground">{pilotError}</p>
+          ) : !pilotMetrics || pilotBusy ? (
+            <p className="mt-4 rounded-md bg-secondary/40 p-4 text-center text-sm text-muted-foreground">正在汇总真实试点数据…</p>
+          ) : !pilotMetrics.available ? (
+            <p className="mt-4 rounded-md bg-secondary/40 p-4 text-sm leading-6 text-muted-foreground">试点遥测表尚未迁移。核心推荐不受影响；发布试点前执行一次 schema migration 后即可开始累计。</p>
+          ) : (
+            <>
+              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                {[
+                  { label: '有效供给', value: pilotMetrics.supply.eligibleProfiles, sub: '满足推荐必要资料' },
+                  { label: '推荐下发', value: pilotMetrics.exposure.deliveries, sub: `${pilotMetrics.exposure.viewers} 位用户收到` },
+                  { label: '候选覆盖率', value: `${pilotMetrics.exposure.coverageRate}%`, sub: `${pilotMetrics.exposure.targets} 位候选获曝光` },
+                  { label: '头部 10% 占比', value: `${pilotMetrics.exposure.top10Share}%`, sub: `单人最高 ${pilotMetrics.exposure.maxPerTarget} 次` },
+                ].map(item => (
+                  <div key={item.label} className="rounded-md border border-border bg-secondary/40 p-3 text-center">
+                    <p className="cjk-latin font-xing text-2xl text-primary">{item.value}</p>
+                    <p className="mt-1 text-xs text-foreground/80">{item.label}</p>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">{item.sub}</p>
+                  </div>
+                ))}
+              </div>
+              {pilotMetrics.exposure.deliveries === 0 && (
+                <p className="mt-4 rounded-md border border-gold/30 bg-gold/10 px-3 py-2 text-xs leading-5 text-foreground/80">
+                  当前尚无真实推荐曝光样本。先补充真实供给并跑小规模试点；在产生真实互配与双方回应前，不调整推荐权重。
+                </p>
+              )}
+              <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5">
+                {[
+                  ['单向有意', pilotMetrics.funnel.likes],
+                  ['互相有意', pilotMetrics.funnel.mutualPairs],
+                  ['开启会话', pilotMetrics.funnel.conversations],
+                  ['双方回应', pilotMetrics.funnel.twoWayConversations],
+                  ['真人消息', pilotMetrics.funnel.messages],
+                  ['活动报名', pilotMetrics.funnel.eventJoins],
+                  ['真实到场', pilotMetrics.funnel.eventCheckins],
+                  ['愿意继续', pilotMetrics.funnel.feedbackContinue],
+                  ['暂时暂停', pilotMetrics.funnel.feedbackPause],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-md bg-secondary/40 p-2.5 text-center">
+                    <p className="cjk-latin text-lg font-semibold text-foreground">{value}</p>
+                    <p className="text-[10px] text-muted-foreground">{label}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 grid gap-3 text-xs text-muted-foreground md:grid-cols-2">
+                <div className="rounded-md border border-border p-3">
+                  <p className="font-semibold text-foreground/85">城市供给</p>
+                  <p className="mt-1 leading-5">{pilotMetrics.supply.byCity.length ? pilotMetrics.supply.byCity.map(x => `${x.city} ${x.count}`).join(' · ') : '暂无有效供给'}</p>
+                </div>
+                <div className="rounded-md border border-border p-3">
+                  <p className="font-semibold text-foreground/85">推荐来源</p>
+                  <p className="mt-1 leading-5">{pilotMetrics.exposure.sources.length ? pilotMetrics.exposure.sources.map(x => `${x.source} ${x.count}`).join(' · ') : '暂无推荐下发'}</p>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="card-cn rounded-lg p-5 md:p-6">
           <h2 className="mb-1 font-xing text-2xl text-foreground">七日趋势</h2>
           <p className="mb-4 text-xs text-muted-foreground">金为新注册,红为社区发帖;柱子越高,当日越热闹</p>
           <div className="flex h-36 items-end gap-2 md:gap-3">
@@ -452,27 +546,8 @@ export function AdminPage() {
         </section>
 
         <section className="card-cn rounded-lg p-5 md:p-6">
-          <h2 className="mb-1 font-xing text-2xl text-foreground">数据存储</h2>
-          <p className="mb-3 text-xs text-muted-foreground">全站数据已存入站点数据库,刷新、换设备都不丢。聊天图片若堆积过多,可一键清理释放容量,文字记录不受影响。</p>
-          {confirmPurge ? (
-            <span className="flex items-center gap-1.5">
-              <button
-                className="btn-primary !px-2.5 !py-1 text-[11px]"
-                onClick={() => {
-                  const n = purgeChatImages()
-                  toast(n ? `已清理 ${n} 张聊天图片,容量已释放` : '暂无聊天图片可清理')
-                  setConfirmPurge(false)
-                }}
-              >
-                确认清理
-              </button>
-              <button className="btn-outline !px-2.5 !py-1 text-[11px]" onClick={() => setConfirmPurge(false)}>再想想</button>
-            </span>
-          ) : (
-            <button className="btn-outline !px-3 !py-1.5 text-xs transition active:scale-95" onClick={() => setConfirmPurge(true)}>
-              清理聊天图片
-            </button>
-          )}
+          <h2 className="mb-1 font-xing text-2xl text-foreground">数据存储与私信边界</h2>
+          <p className="text-xs leading-6 text-muted-foreground">业务数据统一持久化到站点数据库。会员私信内容由会话双方使用，后台不提供直接改写或批量清理私信正文/图片的操作入口；附件生命周期后续由服务端保留策略统一治理。</p>
         </section>
         </>
         )}
@@ -733,7 +808,9 @@ export function AdminPage() {
                           title="删除这张图"
                           className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-ink text-primary-foreground shadow-card transition hover:opacity-80"
                           onClick={() => {
-                            if (adminSetPostImages(p.id, p.images.filter((_, x) => x !== i))) toast('已删除该图')
+                            void adminSetPostImages(p.id, p.images.filter((_, x) => x !== i))
+                              .then(ok => ok && toast.success('图片已删除并确认保存'))
+                              .catch(e => toast.error(e instanceof Error ? e.message : '图片删除未保存,请重试'))
                           }}
                         >
                           <X size={8} />
@@ -766,12 +843,13 @@ export function AdminPage() {
                           <button
                             className="btn-primary !px-2.5 !py-1 text-[11px]"
                             onClick={() => {
-                              if (adminEditPostText(p.id, editPostText)) {
-                                toast.success('文字已更新,社区即时展示')
-                                setEditPostId('')
-                              } else {
-                                toast.error('正文不能为空')
-                              }
+                              void adminEditPostText(p.id, editPostText)
+                                .then(ok => {
+                                  if (!ok) return toast.error('正文不能为空或记录不存在')
+                                  toast.success('文字已更新并确认保存')
+                                  setEditPostId('')
+                                })
+                                .catch(e => toast.error(e instanceof Error ? e.message : '文字未保存,请重试'))
                             }}
                           >
                             保存
@@ -788,7 +866,9 @@ export function AdminPage() {
                     role="switch"
                     aria-checked={!!p.featured}
                     onClick={() => {
-                      if (togglePostFeatured(p.id)) toast(p.featured ? '已取消精选' : '已设为精选,全站可见金标')
+                      void togglePostFeatured(p.id)
+                        .then(ok => ok ? toast.success(p.featured ? '已取消精选' : '已设为精选,全站可见金标') : toast.error('记录不存在或无权限'))
+                        .catch(e => toast.error(e instanceof Error ? e.message : '精选状态未保存,请重试'))
                     }}
                     className={cn(
                       'flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition',
@@ -814,10 +894,13 @@ export function AdminPage() {
                       <button
                         className="btn-primary !px-2.5 !py-1 text-[11px]"
                         onClick={() => {
-                          if (removePost(p.id)) {
-                            toast.success('违规帖已删除,全站不再展示')
-                            setConfirmPostDel('')
-                          }
+                          void removePost(p.id)
+                            .then(ok => {
+                              if (!ok) return toast.error('记录不存在或无权限')
+                              toast.success('违规帖已删除,全站不再展示')
+                              setConfirmPostDel('')
+                            })
+                            .catch(e => toast.error(e instanceof Error ? e.message : '帖子删除未完成,请重试'))
                         }}
                       >
                         确认删除
@@ -1014,15 +1097,16 @@ export function AdminPage() {
               className="btn-primary w-full !py-2.5 disabled:opacity-50"
               disabled={!digestTitle.trim() || !digestPicks.length}
               onClick={() => {
-                if (publishDigest({ title: digestTitle, intro: digestIntro, postIds: digestPicks, cover: digestCovers[0] || undefined, covers: digestCovers })) {
-                  toast.success('本期合集已发布,社区门口即刻展示')
-                  setDigestTitle('')
-                  setDigestIntro('')
-                  setDigestCovers([])
-                  setDigestPicks([])
-                } else {
-                  toast.error('标题和选帖都要备齐才能发布')
-                }
+                void publishDigest({ title: digestTitle, intro: digestIntro, postIds: digestPicks, cover: digestCovers[0] || undefined, covers: digestCovers })
+                  .then(ok => {
+                    if (!ok) return toast.error('标题和选帖都要备齐才能发布')
+                    toast.success('本期合集已发布,社区门口即刻展示')
+                    setDigestTitle('')
+                    setDigestIntro('')
+                    setDigestCovers([])
+                    setDigestPicks([])
+                  })
+                  .catch(e => toast.error(e instanceof Error ? e.message : '本期合集未发布成功,请重试'))
               }}
             >
               <BookMarked size={15} />
@@ -1052,7 +1136,9 @@ export function AdminPage() {
                         title="撤下这期合集"
                         className="btn-ghost shrink-0 !px-2 text-muted-foreground hover:text-primary"
                         onClick={() => {
-                          if (removeDigest(d.id)) toast('已撤下这期合集')
+                          void removeDigest(d.id)
+                            .then(ok => ok && toast.success('已撤下这期合集'))
+                            .catch(e => toast.error(e instanceof Error ? e.message : '合集未撤下,请重试'))
                         }}
                       >
                         <Trash2 size={14} />
@@ -1073,7 +1159,7 @@ export function AdminPage() {
           <h2 className="mb-1 font-xing text-2xl text-foreground">举报处理</h2>
           <p className="mb-3 text-xs text-muted-foreground">会员提交的举报会进入待办队列;核实后「停用账号」或「忽略」,处理完转入已办。</p>
           <div className="space-y-2">
-            {reports.filter(r => r.status !== 'done').map(r => {
+            {reports.filter(r => r.status !== 'done' || r.appealStatus === 'open').map(r => {
               const reporter = users.find(u => u.id === r.by)
               const target = users.find(u => u.id === r.target)
               return (
@@ -1084,16 +1170,26 @@ export function AdminPage() {
                     <span className="ml-auto text-[11px] text-muted-foreground">{reporter?.nickname ?? '佚名'} 举报 · {new Date(r.at).toLocaleDateString()}</span>
                   </div>
                   {r.note && <p className="mt-1.5 rounded bg-muted/50 px-2 py-1 text-xs text-foreground/75">「{r.note}」</p>}
+                  {r.appealNote && (
+                    <div className="mt-1.5 rounded border border-gold/30 bg-gold/5 px-2 py-1.5 text-xs text-foreground/80">
+                      <p className="font-semibold text-gold">申诉{r.appealStatus === 'open' ? ' · 待复核' : ' · 已复核'}</p>
+                      <p className="mt-0.5">{r.appealNote}</p>
+                    </div>
+                  )}
                   {target?.banned && <p className="mt-1.5 text-[11px] text-gold">该账号已处于停用状态。</p>}
                   <div className="mt-2 flex gap-2">
                     {confirmBan === r.id ? (
                       <>
                         <button
                           className="btn-primary !px-3 !py-1.5 text-xs"
-                          onClick={() => {
-                            if (resolveReport(r.id, 'ban')) {
-                              toast.success(`已停用「${target?.nickname ?? ''}」并归档举报`)
-                              setConfirmBan('')
+                          onClick={async () => {
+                            try {
+                              if (await resolveReport(r.id, 'ban')) {
+                                toast.success(`已停用「${target?.nickname ?? ''}」并保存处理结果`)
+                                setConfirmBan('')
+                              }
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : '处理未保存，请重试')
                             }
                           }}
                         >
@@ -1108,8 +1204,12 @@ export function AdminPage() {
                         </button>
                         <button
                           className="btn-ghost !px-3 !py-1.5 text-xs text-muted-foreground"
-                          onClick={() => {
-                            if (resolveReport(r.id, 'dismiss')) toast('已忽略该举报')
+                          onClick={async () => {
+                            try {
+                              if (await resolveReport(r.id, 'dismiss')) toast.success('核查结果已保存')
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : '处理未保存，请重试')
+                            }
                           }}
                         >
                           忽略
@@ -1120,13 +1220,13 @@ export function AdminPage() {
                 </div>
               )
             })}
-            {!reports.some(r => r.status !== 'done') && (
+            {!reports.some(r => r.status !== 'done' || r.appealStatus === 'open') && (
               <p className="rounded-md bg-secondary/40 p-6 text-center text-sm text-muted-foreground">暂无待处理举报,社区风清气正。</p>
             )}
           </div>
-          {reports.some(r => r.status === 'done') && (
+          {reports.some(r => r.status === 'done' && r.appealStatus !== 'open') && (
             <p className="mt-3 text-[11px] text-muted-foreground">
-              已处理 {reports.filter(r => r.status === 'done').length} 条举报。
+              已处理 {reports.filter(r => r.status === 'done' && r.appealStatus !== 'open').length} 条举报；处理结论直接写入工单，不通过聊天模拟通知。
             </p>
           )}
         </section>
@@ -1145,7 +1245,9 @@ export function AdminPage() {
                 <button
                   className="btn-outline !px-3 !py-1.5 text-xs"
                   onClick={() => {
-                    if (unbanUser(u.id)) toast.success(`已恢复「${u.nickname}」的账号`)
+                    void unbanUser(u.id)
+                      .then(ok => ok && toast.success(`已恢复「${u.nickname}」的账号`))
+                      .catch(e => toast.error(e instanceof Error ? e.message : '恢复账号未保存,请重试'))
                   }}
                 >
                   恢复账号
@@ -1264,7 +1366,9 @@ export function AdminPage() {
                     <button
                       className="btn-outline shrink-0 !px-3 !py-1.5 text-xs"
                       onClick={() => {
-                        if (unbanUser(u.id)) toast.success(`已恢复「${u.nickname}」的账号`)
+                        void unbanUser(u.id)
+                          .then(ok => ok && toast.success(`已恢复「${u.nickname}」的账号`))
+                          .catch(e => toast.error(e instanceof Error ? e.message : '恢复账号未保存,请重试'))
                       }}
                     >
                       恢复账号
@@ -1274,10 +1378,13 @@ export function AdminPage() {
                       <button
                         className="btn-primary shrink-0 !px-3 !py-1.5 text-xs"
                         onClick={() => {
-                          if (banUser(u.id)) {
-                            toast.success(`已停用「${u.nickname}」`)
-                            setConfirmMemberBan('')
-                          }
+                          void banUser(u.id)
+                            .then(ok => {
+                              if (!ok) return toast.error('不能停用该账号')
+                              toast.success(`已停用「${u.nickname}」`)
+                              setConfirmMemberBan('')
+                            })
+                            .catch(e => toast.error(e instanceof Error ? e.message : '停用账号未保存,请重试'))
                         }}
                       >
                         确认停用

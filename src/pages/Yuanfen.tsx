@@ -1,20 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Hourglass, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import { Hourglass, ChevronLeft, ChevronRight, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import { isProfileReadyForMatching, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
+import { hashStr, isProfileReadyForMatching } from '@/lib/store-model'
 import { regionOf } from '@/lib/region'
 import { YuanfenCard } from '@/components/yuanfen/YuanfenCard'
 import { MatchModal } from '@/components/MatchModal'
 
 export function YuanfenPage() {
-  const { dailyYuanfen, like, unlike, pass, unpass, markTour, matchScore, me, match } = useStore()
-  // 今日三位有缘人进页即锁定, 掠过/有意不改变名单, 可自由前后翻看
-  const [list] = useState(() => dailyYuanfen())
+  const { loadDiscoveryProfiles, like, unlike, pass, unpass, markTour, matchScore, me, match } = useStore()
+  // 今日候选由服务端资格查询取得；进页后锁定当前三位，掠过/有意不改变本轮名单。
+  const [list, setList] = useState<User[]>([])
   const [idx, setIdx] = useState(0)
   const [matched, setMatched] = useState<User | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
   const touchX = useRef<number | null>(null)
+  const markTourRef = useRef(markTour)
+  useEffect(() => {
+    markTourRef.current = markTour
+  }, [markTour])
+  const loadDiscoveryRef = useRef(loadDiscoveryProfiles)
+  useEffect(() => {
+    loadDiscoveryRef.current = loadDiscoveryProfiles
+  }, [loadDiscoveryProfiles])
   const acted = new Set([...(match.likes[me?.id ?? ''] ?? []), ...(match.passes[me?.id ?? ''] ?? [])])
   const [sortByMatch, setSortByMatch] = useState(() => {
     try {
@@ -23,19 +35,47 @@ export function YuanfenPage() {
       return false
     }
   })
-  const order = useMemo(
-    () => (sortByMatch ? [...list].sort((a, b) => matchScore(b) - matchScore(a)) : list),
-    [list, sortByMatch, matchScore],
-  )
+  const profileReady = !!me && isProfileReadyForMatching(me)
+  const meId = me?.id ?? ''
+  const recommendationKey = me ? `${me.id}|${me.gender}|${me.seeking}|${me.birthDate}|${me.city}` : ''
+  const order = useMemo(() => {
+    const eligible = profileReady ? list : []
+    return sortByMatch ? [...eligible].sort((a, b) => matchScore(b) - matchScore(a)) : eligible
+  }, [list, profileReady, sortByMatch, matchScore])
 
   const best = useMemo(
-    () => (list.length ? [...list].sort((a, b) => matchScore(b) - matchScore(a))[0] : null),
-    [list, matchScore],
+    () => (order.length ? [...order].sort((a, b) => matchScore(b) - matchScore(a))[0] : null),
+    [order, matchScore],
   )
-  const profileReady = !!me && isProfileReadyForMatching(me)
 
   useEffect(() => {
-    markTour('yuanfen')
+    if (!profileReady || !meId) return
+    let alive = true
+    void Promise.resolve().then(async () => {
+      if (!alive) return
+      setLoading(true)
+      setLoadError('')
+      try {
+        const res = await loadDiscoveryRef.current({ page: 1, perPage: 48 })
+        if (!alive) return
+        const today = new Date().toISOString().slice(0, 10)
+        const seed = hashStr(meId + today)
+        const picked = [...res.items]
+          .sort((a, b) => hashStr(a.id + seed) - hashStr(b.id + seed))
+          .slice(0, 3)
+        setList(picked)
+        setIdx(0)
+      } catch (e) {
+        if (alive) setLoadError(e instanceof Error ? e.message : '今日推荐加载失败')
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })
+    return () => { alive = false }
+  }, [profileReady, recommendationKey, meId, retryKey])
+
+  useEffect(() => {
+    void markTourRef.current('yuanfen').catch(() => {})
   }, [])
 
   // 键盘左右方向键翻看, 输入框聚焦时不响应
@@ -44,11 +84,11 @@ export function YuanfenPage() {
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       if (e.key === 'ArrowLeft') setIdx(i => Math.max(0, i - 1))
-      else if (e.key === 'ArrowRight') setIdx(i => Math.min(Math.max(list.length - 1, 0), i + 1))
+      else if (e.key === 'ArrowRight') setIdx(i => Math.min(Math.max(order.length - 1, 0), i + 1))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [list.length])
+  }, [order.length])
   const now = new Date()
   const dateStr = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日`
   const current = order[idx]
@@ -61,7 +101,7 @@ export function YuanfenPage() {
         <p className="text-xs tracking-[.4em] text-gold">随缘分配</p>
         <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">今日随缘</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          {dateStr} · 缘不贪多,今日为你甄选 <span className="cjk-latin font-semibold text-primary">{list.length}</span> 位有缘人
+          {dateStr} · 缘不贪多,今日为你甄选 <span className="cjk-latin font-semibold text-primary">{order.length}</span> 位有缘人
         </p>
         <button
           className="mt-3 rounded-full border border-border px-3 py-1 text-[11px] text-foreground/70 transition hover:border-gold/60 hover:text-gold"
@@ -76,7 +116,7 @@ export function YuanfenPage() {
             }
           }}
         >
-          {sortByMatch ? '按契合度排列中 · 点一下回到随缘序' : '按随缘序排列中 · 点一下改按契合度'}
+          {sortByMatch ? '按规则参考排列中 · 点一下回到随缘序' : '按随缘序排列中 · 点一下改按规则参考'}
         </button>
       </div>
 
@@ -87,10 +127,10 @@ export function YuanfenPage() {
             <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
               <span className="inline-flex items-center gap-1 rounded-sm bg-gold px-1.5 py-0.5 text-[10px] text-accent-foreground">
                 <Sparkles size={10} />
-                今日最契合
+                今日优先推荐
               </span>
               {best.nickname}
-              <span className="cjk-latin text-gold">{matchScore(best)}% 契合</span>
+              <span className="cjk-latin text-gold">规则参考 {matchScore(best)} 分</span>
             </p>
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {best.job} · {regionOf(best)}
@@ -119,7 +159,7 @@ export function YuanfenPage() {
               if (touchX.current == null) return
               const dx = e.changedTouches[0].clientX - touchX.current
               if (Math.abs(dx) > 48) {
-                if (dx < 0) setIdx(i => Math.min(Math.max(list.length - 1, 0), i + 1))
+                if (dx < 0) setIdx(i => Math.min(Math.max(order.length - 1, 0), i + 1))
                 else setIdx(i => Math.max(0, i - 1))
               }
               touchX.current = null
@@ -129,26 +169,32 @@ export function YuanfenPage() {
               key={current.id}
               user={current}
               onPass={() => {
-                pass(current.id)
-                toast('已掠过此缘,下一位')
-                next()
+                void pass(current.id)
+                  .then(() => { toast('已掠过此缘,下一位'); next() })
+                  .catch(e => toast.error(e instanceof Error ? e.message : '跳过未保存,请重试'))
               }}
-              onLike={() => {
-                const back = like(current.id)
-                if (back) {
-                  setMatched(current)
-                } else {
-                  toast('已道「有意」,若对方亦有意,将送往你的佳音')
+              onLike={async () => {
+                try {
+                  const back = await like(current.id)
+                  if (back) setMatched(current)
+                  else toast.success('「有意」已保存,若对方也真实表达有意,将结为佳音')
+                  next()
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : '表达「有意」未保存,请重试')
                 }
-                next()
               }}
-              onUnlike={() => {
-                unlike(current.id)
-                toast('已撤回这份「有意」')
+              onUnlike={async () => {
+                try {
+                  await unlike(current.id)
+                  toast.success('已撤回这份「有意」')
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : '撤回未成功,请重试')
+                }
               }}
               onUnpass={() => {
-                unpass(current.id)
-                toast('已收回「且过」,此缘复还')
+                void unpass(current.id)
+                  .then(() => toast.success('已收回「且过」,此缘复还'))
+                  .catch(e => toast.error(e instanceof Error ? e.message : '撤回跳过未保存,请重试'))
               }}
             />
           </div>
@@ -162,11 +208,11 @@ export function YuanfenPage() {
                 <ChevronLeft size={14} />
                 上一位
               </button>
-              <p className="cjk-latin text-[11px] text-muted-foreground">第 {Math.min(idx + 1, list.length)} / {list.length} 位</p>
+              <p className="cjk-latin text-[11px] text-muted-foreground">第 {Math.min(idx + 1, order.length)} / {order.length} 位</p>
               <button
                 className="btn-outline !px-3 !py-1.5 text-xs disabled:opacity-40"
-                disabled={idx >= list.length - 1}
-                onClick={() => setIdx(i => Math.min(list.length - 1, i + 1))}
+                disabled={idx >= order.length - 1}
+                onClick={() => setIdx(i => Math.min(order.length - 1, i + 1))}
               >
                 下一位
                 <ChevronRight size={14} />
@@ -188,15 +234,29 @@ export function YuanfenPage() {
       ) : (
         <div className="card-cn mx-auto max-w-md rounded-lg p-10 text-center">
           <span className="seal mx-auto flex h-14 w-14 font-xing text-2xl">缘</span>
-          <h3 className="mt-4 font-xing text-2xl text-foreground">{profileReady ? '暂时没有符合条件的缘分' : '先确认必要资料'}</h3>
+          <h3 className="mt-4 font-xing text-2xl text-foreground">
+            {profileReady && loading ? '正在寻找今天的真人候选' : profileReady && loadError ? '今日推荐暂时没有加载成功' : profileReady ? '暂时没有符合条件的缘分' : '先确认必要资料'}
+          </h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            {profileReady
-              ? '当前推荐池没有满足双方必要条件的人。你可以稍后再来，或调整自己的真实资料。'
-              : '确认性别、希望认识的对象、出生日期与所在城市后，才会进入真人推荐。'}
+            {profileReady && loading
+              ? '正在按双方必要条件、跳过和拉黑状态从服务端筛选。'
+              : profileReady && loadError
+                ? loadError
+                : profileReady
+                  ? '当前推荐池没有满足双方必要条件的人。你可以稍后再来，或调整自己的真实资料。'
+                  : '确认性别、希望认识的对象、出生日期与所在城市后，才会进入真人推荐。'}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <Link to="/me" className="btn-primary">{profileReady ? '检查我的资料' : '去完善资料'}</Link>
-            {profileReady && <Link to="/matches" className="btn-outline">查看佳音</Link>}
+            {profileReady && loading ? (
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin" />加载中</span>
+            ) : profileReady && loadError ? (
+              <button className="btn-primary" onClick={() => setRetryKey(v => v + 1)}><RefreshCw size={14} />重新加载</button>
+            ) : (
+              <>
+                <Link to="/me" className="btn-primary">{profileReady ? '检查我的资料' : '去完善资料'}</Link>
+                {profileReady && <Link to="/matches" className="btn-outline">查看佳音</Link>}
+              </>
+            )}
           </div>
         </div>
       )}

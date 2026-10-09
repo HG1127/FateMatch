@@ -5,11 +5,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:full": "node scripts/dev-full.mjs",
+    "start": "node scripts/start-prod.mjs",
+    "start:prod": "node scripts/start-prod.mjs",
+    "admin:reset": "node scripts/admin-account-reset.mjs",
+    "db:migrate": "node scripts/neon-migrate.mjs",
+    "release:check": "node scripts/release-preflight.mjs",
+    "release:check:strict": "node scripts/release-preflight.mjs --strict",
+    "uploads:gc": "node scripts/upload-gc.mjs",
+    "uploads:migrate": "node scripts/upload-migrate.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run --pool=threads --no-file-parallelism --maxWorkers=1 --testTimeout=15000",
+    "test:fast": "vitest run",
     "preview": "vite preview",
-    "e2e": "playwright test"
+    "e2e": "pnpm build && node scripts/e2e-run.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

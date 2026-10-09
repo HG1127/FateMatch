@@ -128,7 +128,7 @@ async function pollHealth() {
 const BACKUP_HOUR = 4
 const BACKUP_MIN = 30
 
-function runScript(script, label) {
+function runScript(script, label, extraEnv = {}) {
   log(`${label}：开始`)
   const out = fs.openSync(WD_LOG, 'a')
   let closed = false
@@ -140,7 +140,7 @@ function runScript(script, label) {
   // 连接串只经环境变量传给子进程，不落盘
   const b = spawn('node', [script], {
     cwd: ROOT,
-    env: { ...process.env, NEON_DSN: dsn },
+    env: { ...process.env, NEON_DSN: dsn, ...extraEnv },
     stdio: ['ignore', out, out],
   })
   b.on('exit', (code) => {
@@ -204,6 +204,38 @@ function scheduleDrill() {
   }, msUntilNextDrill())
 }
 
+// ---------- 上传资产 GC（每日 05:10）：必须先有当天备份；仅清 72h+ 且 DB 无引用的 v2 文件 ----------
+
+const GC_HOUR = 5
+const GC_MIN = 10
+
+function msUntilNextGc() {
+  const now = new Date()
+  const next = new Date(now)
+  next.setHours(GC_HOUR, GC_MIN, 0, 0)
+  if (next <= now) next.setDate(next.getDate() + 1)
+  return next.getTime() - now.getTime()
+}
+
+function runUploadGc() {
+  if (!todayBackupDone()) {
+    log('上传资产 GC：跳过（当天数据库备份尚未完成）')
+    return
+  }
+  runScript('scripts/upload-gc.mjs', '上传资产 GC', {
+    UPLOAD_GC_FORCE: 'yes',
+    UPLOAD_GC_GRACE_HOURS: process.env.UPLOAD_GC_GRACE_HOURS ?? '72',
+  })
+}
+
+function scheduleUploadGc() {
+  if (stopping) return
+  setTimeout(() => {
+    runUploadGc()
+    scheduleUploadGc()
+  }, msUntilNextGc())
+}
+
 // ---------- 启动流程 ----------
 
 async function main() {
@@ -256,8 +288,10 @@ async function main() {
   if (pastDue && !todayBackupDone()) setTimeout(() => runBackup('启动补跑'), 30_000)
   // 每周恢复演练（周日 04:35）
   scheduleDrill()
+  // 每日上传资产 GC（05:10，确认当天备份存在后才执行）
+  scheduleUploadGc()
 
-  log(`看门狗就绪：健康检查 ${HEALTH_URL} 每 ${POLL_MS / 1000}s 轮询；每日 ${BACKUP_HOUR}:${String(BACKUP_MIN).padStart(2, '0')} 自动备份（保留 7 份，启动补跑当日）；每周日恢复演练`)
+  log(`看门狗就绪：健康检查 ${HEALTH_URL} 每 ${POLL_MS / 1000}s 轮询；每日 ${BACKUP_HOUR}:${String(BACKUP_MIN).padStart(2, '0')} 自动备份；每周日恢复演练；每日 ${GC_HOUR}:${String(GC_MIN).padStart(2, '0')} 上传资产 GC（需当天备份，默认保护 72h）`)
 }
 
 main().catch((e) => {

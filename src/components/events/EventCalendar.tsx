@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { EventItem } from '@/lib/store'
 import { EventCard } from '@/components/events/EventCard'
 import { FESTS } from '@/lib/festivals'
@@ -12,7 +12,7 @@ function dateKey(y: number, m: number, d: number): string {
   return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
-export function EventCalendar({ events, onOpen }: { events: EventItem[]; onOpen: (e: EventItem) => void }) {
+export function EventCalendar({ events, onOpen, onRangeChange }: { events: EventItem[]; onOpen: (e: EventItem) => void; onRangeChange?: (from: string, to: string) => void }) {
   const { me } = useStore()
   const today = new Date()
   const [cursor, setCursor] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
@@ -25,6 +25,10 @@ export function EventCalendar({ events, onOpen }: { events: EventItem[]; onOpen:
   const todayKey = dateKey(today.getFullYear(), today.getMonth(), today.getDate())
   const monthKey = `${y}-${String(m + 1).padStart(2, '0')}`
   const monthFests = Object.entries(FESTS).filter(([k]) => k.startsWith(monthKey))
+
+  useEffect(() => {
+    onRangeChange?.(dateKey(y, m, 1), dateKey(y, m, daysInMonth))
+  }, [y, m, daysInMonth, onRangeChange])
 
   const byDate = new Map<string, EventItem[]>()
   events.forEach(e => {

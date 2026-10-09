@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { SectionHead } from '@/components/ui'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 
 export function Moments() {
   const { events, settings } = useStore()

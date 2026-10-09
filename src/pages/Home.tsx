@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { CalendarHeart, ChevronRight, Compass, MessageCircleHeart, UserRoundCheck } from 'lucide-react'
 import { Hero } from '@/components/home/Hero'
 import { Features } from '@/components/home/Features'
 import { Stories } from '@/components/home/Stories'
@@ -10,8 +11,9 @@ import { PostDialog } from '@/components/community/PostDialog'
 import { DetailDialog } from '@/components/explore/DetailDialog'
 import { DigestBanner } from '@/components/community/DigestBanner'
 import { DigestModal } from '@/components/community/DigestModal'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import type { Post, User } from '@/lib/store'
+import { completeness, isProfileReadyForMatching } from '@/lib/store-model'
 
 function Announcement() {
   const { settings } = useStore()
@@ -54,7 +56,7 @@ function FestivalBanner() {
 }
 
 function HotPosts() {
-  const { posts } = useStore()
+  const { posts, me } = useStore()
   const [detailId, setDetailId] = useState('')
   const [profile, setProfile] = useState<User | null>(null)
   const score = (p: Post) => p.likes.length * 2 + p.comments.length * 3 + (p.featured ? 4 : 0)
@@ -67,13 +69,14 @@ function HotPosts() {
         <h2 className="flex items-center font-xing text-2xl text-foreground md:text-3xl">
           社区 <span className="text-gold">·</span> 热帖
           <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 font-sans text-[10px] tracking-widest text-gold">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gold" />
-            实时榜
+            {me ? '按互动排序' : '演示内容'}
           </span>
         </h2>
         <Link to="/community" className="text-xs text-primary transition hover:text-primary/80">去社区看看 →</Link>
       </div>
-      <p className="-mt-2 mb-4 text-[11px] text-muted-foreground">按心动与回帖实时排序,24 小时内的新帖带「新帖」标。</p>
+      <p className="-mt-2 mb-4 text-[11px] text-muted-foreground">
+        {me ? '按当前可见的心动与回帖排序,24 小时内的新帖带「新帖」标。' : '当前为产品演示内容,不代表真实会员动态或运营热度。'}
+      </p>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 [&_article]:mb-0">
         {hot.map(p => (
           <PostTile key={p.id} post={p} fresh={NOW - p.at < 86400_000} onOpen={x => setDetailId(x.id)} onProfile={setProfile} />
@@ -95,18 +98,18 @@ function WelcomeCard() {
         <div className="flex-1">
           <h2 className="font-xing text-2xl text-foreground">新人启程,礼已备好</h2>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            我们为你备了一份启程清单:完善资料、点亮验证、送声招呼……六事皆备,缘自会循光而来。
+            先确认必要资料,再看真人推荐；只有双方都表达「有意」后才会开启佳音。其他功能按需要慢慢探索即可。
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
           <Link
             to="/me"
             className="btn-gold !px-5 !py-2.5 text-sm"
-            onClick={() => markTour('welcome')}
+            onClick={() => { void markTour('welcome').catch(() => {}) }}
           >
             去看清单
           </Link>
-          <button className="btn-ghost !px-4 !py-2.5 text-xs text-muted-foreground" onClick={() => markTour('welcome')}>
+          <button className="btn-ghost !px-4 !py-2.5 text-xs text-muted-foreground" onClick={() => { void markTour('welcome').catch(() => {}) }}>
             先自己逛逛
           </button>
         </div>
@@ -138,7 +141,7 @@ function LedgerNum({ num }: { num: number }) {
 }
 
 function FateLedger() {
-  const { users, posts, events, digests } = useStore()
+  const { users, posts, events, digests, me } = useStore()
   const seats = events.reduce((s, e) => s + e.attendees.length, 0)
   const hearts = posts.reduce((s, p) => s + p.likes.length, 0)
   const echoes = posts.reduce((s, p) => s + p.comments.length, 0) + events.reduce((s, e) => s + (e.comments ?? []).length, 0)
@@ -154,10 +157,12 @@ function FateLedger() {
     <section className="mx-auto max-w-6xl px-4 pb-4">
       <div className="card-cn rounded-lg px-6 py-5 md:py-6">
         <div className="relative">
-          <p className="text-center text-xs tracking-[.4em] text-gold">缘分总账</p>
-          <Link to="/report" className="absolute right-0 top-0 text-[11px] text-primary transition hover:text-primary/80">
-            我的缘分周报 →
-          </Link>
+          <p className="text-center text-xs tracking-[.4em] text-gold">{me ? '当前可见数据' : '演示数据'}</p>
+          {me && (
+            <Link to="/report" className="absolute right-0 top-0 text-[11px] text-primary transition hover:text-primary/80">
+              我的缘分周报 →
+            </Link>
+          )}
         </div>
         <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3">
           {rows.map(r => (
@@ -170,7 +175,9 @@ function FateLedger() {
             </div>
           ))}
         </div>
-        <p className="mt-4 text-center text-[11px] text-muted-foreground">每一个数字,都是一次认真的相逢。</p>
+        <p className="mt-4 text-center text-[11px] text-muted-foreground">
+          {me ? '仅统计你当前有权限看到的数据。' : '以下数字来自本地示例数据,仅用于展示产品结构。'}
+        </p>
       </div>
     </section>
   )
@@ -193,19 +200,165 @@ function WeeklyDigest() {
         <Link to="/community" className="text-xs text-primary transition hover:text-primary/80">去社区看看 →</Link>
       </div>
       <p className="-mt-1 mb-3 text-[11px] text-muted-foreground">掌柜每周一辑,把本周最动人的分享打包成集。</p>
-      <DigestBanner digest={latest} count={digestPosts.length} onOpen={() => { viewDigest(latest.id); setOpen(true) }} />
+      <DigestBanner digest={latest} count={digestPosts.length} onOpen={() => { void viewDigest(latest.id); setOpen(true) }} />
       <DigestModal digest={open ? latest : null} posts={digestPosts} onClose={() => setOpen(false)} />
     </section>
   )
 }
 
+function MemberDashboard() {
+  const { me, conversations, unread, dailyYuanfen, events, matchScore, featureOn, loadDiscoveryProfiles } = useStore()
+
+  useEffect(() => {
+    if (!me || !isProfileReadyForMatching(me) || !featureOn('yuanfen')) return
+    void loadDiscoveryProfiles({ page: 1, perPage: 48 }).catch(() => {})
+    // 候选只在本人必要资料发生变化时重新取；Store 方法引用会随状态更新重建，不能作为依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id, me?.gender, me?.seeking, me?.birthDate, me?.city])
+
+  if (!me) return null
+
+  const convs = conversations()
+  const unreadConvs = convs.filter(c => unread(c.user.id) > 0)
+  const unreadTotal = unreadConvs.reduce((sum, c) => sum + unread(c.user.id), 0)
+  const ready = isProfileReadyForMatching(me)
+  const profile = completeness(me)
+  const recs = ready && featureOn('yuanfen') ? dailyYuanfen() : []
+  const firstRec = recs[0] ?? null
+  const now = NOW
+  const joined = featureOn('events')
+    ? events
+        .filter(e => e.attendees.includes(me.id) && new Date(`${e.date}T23:59:59`).getTime() >= now)
+        .sort((a, b) => a.date.localeCompare(b.date))
+    : []
+  const nextEvent = joined[0] ?? null
+  const shared = firstRec ? firstRec.interests.filter(t => me.interests.includes(t)).slice(0, 2) : []
+
+  const priority = unreadTotal > 0
+    ? { to: '/matches', kicker: '先回一封佳音', title: `${unreadTotal} 条真人消息等你回复`, desc: `来自 ${unreadConvs.length} 段双方已互道「有意」的关系。`, action: '去回复' }
+    : !ready
+      ? { to: '/me', kicker: '先让资料真实可用', title: '确认必要资料后再进入推荐', desc: '性别、希望认识的对象、出生日期和城市都由你本人确认。', action: '完善资料' }
+      : firstRec
+        ? { to: '/yuanfen', kicker: '今日关系机会', title: `今天有 ${recs.length} 位符合当前必要条件的人`, desc: '先看推荐理由，再决定是否表达「有意」。', action: '看今日推荐' }
+        : { to: '/explore', kicker: '当前推荐池较安静', title: '暂时没有满足双方必要条件的新推荐', desc: '可以用兴趣筛选了解当前真实供给，不用演示账号凑数。', action: '看看兴趣筛选' }
+
+  return (
+    <div className="clouds-paper">
+      <section className="mx-auto max-w-6xl px-4 py-8 md:py-12">
+        <div className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs tracking-[.35em] text-gold">今天的随缘网</p>
+            <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">{me.nickname}，今天先做一件有价值的事</h1>
+            <p className="mt-2 text-sm text-muted-foreground">不追求多刷人，先处理真实回应、真实推荐和已经答应的见面。</p>
+          </div>
+          <Link to="/trust" className="text-xs text-primary transition hover:text-primary/80">安全与隐私说明 →</Link>
+        </div>
+
+        <Link to={priority.to} className="card-cn group block rounded-xl !border-gold/50 p-5 transition hover:-translate-y-0.5 hover:shadow-lift md:p-7">
+          <p className="text-xs tracking-[.25em] text-gold">{priority.kicker}</p>
+          <div className="mt-2 flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-xing text-2xl text-foreground md:text-3xl">{priority.title}</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{priority.desc}</p>
+            </div>
+            <span className="btn-gold shrink-0 !px-4 !py-2 text-xs">{priority.action}<ChevronRight size={14} /></span>
+          </div>
+        </Link>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
+          <Link to="/matches" className="card-cn rounded-lg p-4 transition hover:border-primary/40 hover:shadow-card">
+            <p className="flex items-center gap-2 text-sm font-semibold text-foreground"><MessageCircleHeart size={16} className="text-primary" />待回复</p>
+            <p className="cjk-latin mt-3 font-xing text-3xl text-primary">{unreadTotal}</p>
+            <p className="mt-1 text-xs text-muted-foreground">只统计双方真实互道「有意」后的未读消息</p>
+          </Link>
+          <Link to="/me" className="card-cn rounded-lg p-4 transition hover:border-primary/40 hover:shadow-card">
+            <p className="flex items-center gap-2 text-sm font-semibold text-foreground"><UserRoundCheck size={16} className="text-gold" />资料准备度</p>
+            <p className="cjk-latin mt-3 font-xing text-3xl text-gold">{profile.pct}%</p>
+            <p className="mt-1 text-xs text-muted-foreground">必要资料不完整时不会进入真人推荐池</p>
+          </Link>
+          <Link to="/events" className="card-cn rounded-lg p-4 transition hover:border-primary/40 hover:shadow-card">
+            <p className="flex items-center gap-2 text-sm font-semibold text-foreground"><CalendarHeart size={16} className="text-primary" />已约活动</p>
+            <p className="cjk-latin mt-3 font-xing text-3xl text-primary">{joined.length}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{nextEvent ? `最近：${nextEvent.date} · ${nextEvent.title}` : '当前没有已确认的未来活动'}</p>
+          </Link>
+        </div>
+
+        <div className="mt-8 grid gap-5 lg:grid-cols-[1.3fr_.7fr]">
+          <section className="card-cn rounded-lg p-5 md:p-6">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs tracking-[.25em] text-gold">今日推荐预览</p>
+                <h2 className="mt-1 font-xing text-2xl text-foreground">先看为什么，再决定要不要认识</h2>
+              </div>
+              <Link to="/yuanfen" className="text-xs text-primary">查看全部 →</Link>
+            </div>
+            {firstRec ? (
+              <div className="mt-4 flex items-center gap-4 rounded-lg border border-border bg-secondary/35 p-3">
+                <img src={firstRec.photos[0]} alt={firstRec.nickname} className="h-16 w-16 shrink-0 rounded-full object-cover" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-foreground">{firstRec.nickname} <span className="cjk-latin ml-2 text-xs font-normal text-gold">规则参考 {matchScore(firstRec)} 分</span></p>
+                  <p className="mt-1 text-xs text-muted-foreground">{firstRec.city}{firstRec.job ? ` · ${firstRec.job}` : ''}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] text-primary">满足双方寻找对象条件</span>
+                    {firstRec.city === me.city && <span className="rounded-full bg-secondary px-2 py-1 text-[10px] text-secondary-foreground">同城</span>}
+                    {shared.map(t => <span key={t} className="rounded-full bg-secondary px-2 py-1 text-[10px] text-secondary-foreground">共同兴趣 · {t}</span>)}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                {ready ? '当前没有满足双方必要条件的真人候选。' : '先完成必要资料，推荐才会开始。'}
+              </div>
+            )}
+          </section>
+
+          <section className="card-cn rounded-lg p-5 md:p-6">
+            <p className="text-xs tracking-[.25em] text-gold">换一种认识方式</p>
+            <h2 className="mt-1 font-xing text-2xl text-foreground">按需要探索</h2>
+            <div className="mt-4 space-y-2">
+              {featureOn('explore') && <Link to="/explore" className="flex items-center justify-between rounded-md border border-border p-3 text-sm transition hover:border-primary/40"><span className="flex items-center gap-2"><Compass size={15} />兴趣筛选</span><ChevronRight size={14} /></Link>}
+              {featureOn('explore') && <Link to="/nearby" className="flex items-center justify-between rounded-md border border-border p-3 text-sm transition hover:border-primary/40"><span>同城</span><ChevronRight size={14} /></Link>}
+              {featureOn('community') && <Link to="/community" className="flex items-center justify-between rounded-md border border-border p-3 text-sm transition hover:border-primary/40"><span>生活分享</span><ChevronRight size={14} /></Link>}
+              <Link to="/favorites" className="flex items-center justify-between rounded-md border border-border p-3 text-sm transition hover:border-primary/40"><span>我的收藏</span><ChevronRight size={14} /></Link>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export function HomePage() {
+  const { me, account, booted, dataReady, bootError, retryBoot } = useStore()
+  if (account && (!booted || !dataReady)) {
+    return (
+      <div className="clouds-paper mx-auto flex min-h-[60vh] max-w-lg items-center px-4 py-16">
+        <div className="card-cn w-full rounded-lg p-6 text-center md:p-8">
+          <span className="seal mx-auto flex h-12 w-12 font-xing text-lg">{booted ? '停' : '候'}</span>
+          <h1 className="mt-4 font-xing text-3xl text-foreground">{booted ? '数据还没有可信加载' : '正在载入你的真实数据'}</h1>
+          <p className="mt-2 text-sm leading-7 text-muted-foreground">
+            {booted ? (bootError || '当前无法确认服务端数据状态，因此不会展示旧状态或执行关系操作。') : '确认服务端状态后再进入今日任务台。'}
+          </p>
+          {booted && <button className="btn-primary mt-5" onClick={retryBoot}>重新加载数据</button>}
+        </div>
+      </div>
+    )
+  }
+  if (me) {
+    return (
+      <>
+        <Announcement />
+        <FestivalBanner />
+        <MemberDashboard />
+        <WelcomeCard />
+      </>
+    )
+  }
   return (
     <>
       <Announcement />
       <FestivalBanner />
       <Hero />
-      <WelcomeCard />
       <Features />
       <Stories />
       <WeeklyDigest />

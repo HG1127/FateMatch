@@ -1,0 +1,27 @@
+# Protect user data, credentials, local agent state and generated outputs.
+.git
+.gitignore
+.github
+.vibex
+.vscode
+.cursor
+.codex
+node_modules
+dist
+backups
+uploads
+logs
+test-results
+playwright-report
+coverage
+*.local
+.env
+.env.*
+*.pem
+*.key
+*.log
+*credentials*
+dev-secrets.local
+pocketbase/pb_data
+vibex-local/bin
+project/.rh_attachments

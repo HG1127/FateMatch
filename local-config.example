@@ -1,0 +1,6 @@
+# 复制为 dev-secrets.local 后填写真实连接串。
+# dev-secrets.local 匹配 *.local，已被 .gitignore 排除。
+NEON_DSN=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+
+# 可选：前端首选端口。被占用时 dev:full 会继续尝试后续 10 个端口。
+VITE_PORT=8000

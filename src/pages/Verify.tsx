@@ -1,6 +1,6 @@
 import { Camera, PhoneCall, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store-context'
 import { PhoneCard, PhotoCard, RealnameCard } from '@/components/verify/VerifyBlocks'
 
 const ITEMS = [

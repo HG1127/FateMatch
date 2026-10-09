@@ -1,37 +1,41 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
-import { CalendarHeart, ChevronDown, Compass, Home as HomeIcon, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { CalendarHeart, ChevronDown, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
+import { useStore } from '@/lib/store-context'
 import type { FeatureKey } from '@/lib/store'
 import { cn } from '@/lib/utils'
 import { LocalAccountMenu } from '@/components/local/LocalAccountMenu'
 import { AvatarFrame, LevelSeal, LevelUpCelebration, NickName } from '@/components/ui'
 
-const NAV: Array<{ to: string; label: string; feat?: FeatureKey }> = [
-  { to: '/', label: '首页' },
-  { to: '/yuanfen', label: '随缘分配', feat: 'yuanfen' },
-  { to: '/explore', label: '兴趣匹配', feat: 'explore' },
-  { to: '/nearby', label: '同城之缘', feat: 'explore' },
-  { to: '/events', label: '活动牵线', feat: 'events' },
-  { to: '/community', label: '社区分享', feat: 'community' },
-  { to: '/matches', label: '我的佳音', feat: 'matches' },
+const MEMBER_NAV: Array<{ to: string; label: string; feat?: FeatureKey }> = [
+  { to: '/', label: '推荐' },
+  { to: '/events', label: '活动', feat: 'events' },
+  { to: '/matches', label: '消息', feat: 'matches' },
+  { to: '/me', label: '我的' },
 ]
 
-/** 移动端底部主导航 */
-const MOBILE_TABS: Array<{ to: string; label: string; icon: typeof HomeIcon; feat?: FeatureKey }> = [
-  { to: '/', label: '首页', icon: HomeIcon },
-  { to: '/yuanfen', label: '随缘', icon: Sparkles, feat: 'yuanfen' },
-  { to: '/explore', label: '匹配', icon: Compass, feat: 'explore' },
+const GUEST_NAV: Array<{ to: string; label: string; feat?: FeatureKey }> = [
+  { to: '/', label: '首页' },
+  { to: '/trust', label: '安全与隐私' },
+]
+
+/** 移动端仅保留四个最高频任务入口。 */
+const MOBILE_TABS: Array<{ to: string; label: string; icon: typeof Sparkles; feat?: FeatureKey }> = [
+  { to: '/', label: '推荐', icon: Sparkles },
   { to: '/events', label: '活动', icon: CalendarHeart, feat: 'events' },
-  { to: '/matches', label: '佳音', icon: MessageCircleHeart, feat: 'matches' },
+  { to: '/matches', label: '消息', icon: MessageCircleHeart, feat: 'matches' },
   { to: '/me', label: '我的', icon: UserRound },
 ]
 
-/** 收进「我的缘分」下拉的次级入口 */
+/** 低频能力不再争夺主导航，功能仍完整保留。 */
 const MORE = [
-  { to: '/favorites', label: '我的收藏', desc: '心动的人与想去的活动' },
-  { to: '/report', label: '缘分周报', desc: '一周攒下的缘分盘点' },
-  { to: '/badges', label: '缘分成就', desc: '一步步点亮的勋章' },
+  { to: '/yuanfen', label: '今日精选', desc: '每天少量、可解释的推荐' },
+  { to: '/explore', label: '兴趣筛选', desc: '按城市与兴趣主动探索' },
+  { to: '/nearby', label: '同城', desc: '按城市与地区寻找' },
+  { to: '/community', label: '生活分享', desc: '从真实生活内容了解彼此' },
+  { to: '/favorites', label: '我的收藏', desc: '想继续了解的人与活动' },
+  { to: '/report', label: '缘分周报', desc: '一周关系进展回顾' },
+  { to: '/badges', label: '成长记录', desc: '辅助记录，不代表人格信用' },
 ]
 
 function MoreDropdown() {
@@ -48,7 +52,7 @@ function MoreDropdown() {
         )}
         onClick={() => setOpen(o => !o)}
       >
-        我的缘分
+        更多
         <ChevronDown size={13} className={cn('transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
@@ -77,9 +81,24 @@ function MoreDropdown() {
 }
 
 export function Layout() {
-  const { me, conversations, unread, featureOn } = useStore()
+  const { me, dataReady, conversations, unread, featureOn, refreshChatSummaries } = useStore()
+  const refreshRef = useRef(refreshChatSummaries)
+  useEffect(() => { refreshRef.current = refreshChatSummaries }, [refreshChatSummaries])
+  useEffect(() => {
+    if (!me?.id || !dataReady) return
+    let lastRun = 0
+    const refresh = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - lastRun < 10_000) return
+      lastRun = Date.now()
+      void refreshRef.current().catch(() => {})
+    }
+    const timer = window.setInterval(refresh, 45_000)
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', refresh); window.removeEventListener('focus', refresh) }
+  }, [me?.id, dataReady])
   const mutualCount = me ? conversations().reduce((s, c) => s + unread(c.user.id), 0) : 0
-  const items = NAV.filter(n => !n.feat || featureOn(n.feat))
+  const items = (me ? MEMBER_NAV : GUEST_NAV).filter(n => !n.feat || featureOn(n.feat))
   const isAdmin = me?.role === 'admin'
 
   return (
@@ -117,7 +136,7 @@ export function Layout() {
                 )}
               </NavLink>
             ))}
-            <MoreDropdown />
+            {me && <MoreDropdown />}
             {isAdmin && (
               <NavLink
                 to="/admin"
@@ -147,42 +166,6 @@ export function Layout() {
             <LocalAccountMenu />
           </div>
         </div>
-        {/* 移动端次级导航(主导航在底部标签栏) */}
-        <nav className="flex gap-1 overflow-x-auto px-3 pb-2 md:hidden">
-          {items.filter(i => !MOBILE_TABS.some(t => t.to === i.to)).map(n => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.to === '/'}
-              className={({ isActive }) =>
-                cn('whitespace-nowrap rounded-full border px-3 py-1 text-xs', isActive ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/70')
-              }
-            >
-              {n.label}
-            </NavLink>
-          ))}
-          {MORE.map(m => (
-            <NavLink
-              key={m.to}
-              to={m.to}
-              className={({ isActive }) =>
-                cn('whitespace-nowrap rounded-full border px-3 py-1 text-xs', isActive ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/70')
-              }
-            >
-              {m.label}
-            </NavLink>
-          ))}
-          {isAdmin && (
-            <NavLink
-              to="/admin"
-              className={({ isActive }) =>
-                cn('whitespace-nowrap rounded-full border px-3 py-1 text-xs', isActive ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/70')
-              }
-            >
-              系统设置
-            </NavLink>
-          )}
-        </nav>
       </header>
 
       <main className="flex-1">
@@ -207,6 +190,7 @@ export function Layout() {
               <li>· 本平台仅面向 18 周岁以上成年人</li>
               <li>· 核验状态按实际记录展示,未核验信息不作平台背书</li>
               <li>· 请保护个人隐私,谨防财物往来</li>
+              <li><Link className="text-gold-soft/90 transition hover:text-gold-soft" to="/trust#privacy">· 查看安全与隐私说明</Link></li>
             </ul>
           </div>
           <div className="text-sm">
@@ -216,6 +200,8 @@ export function Layout() {
               <li><Link className="text-primary-foreground/70 hover:text-gold-soft transition" to="/explore">兴趣匹配</Link></li>
               <li><Link className="text-primary-foreground/70 hover:text-gold-soft transition" to="/nearby">同城之缘</Link></li>
               <li><Link className="text-primary-foreground/70 hover:text-gold-soft transition" to="/auth?mode=register">加入随缘网</Link></li>
+              <li><Link className="text-primary-foreground/70 hover:text-gold-soft transition" to="/trust#safety">安全帮助</Link></li>
+              <li><Link className="text-primary-foreground/70 hover:text-gold-soft transition" to="/trust#account">账号与数据</Link></li>
             </ul>
           </div>
         </div>
@@ -227,38 +213,40 @@ export function Layout() {
         </div>
       </footer>
 
-      {/* 移动端底部标签栏 */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-gold/25 bg-background/95 backdrop-blur md:hidden">
-        <div className="mx-auto flex max-w-md items-stretch justify-between px-2 pb-[env(safe-area-inset-bottom)]">
-          {MOBILE_TABS.filter(t => !t.feat || featureOn(t.feat)).map(t => {
-            const Icon = t.icon
-            return (
-              <NavLink
-                key={t.to}
-                to={t.to}
-                end={t.to === '/'}
-                className={({ isActive }) =>
-                  cn(
-                    'relative mx-0.5 flex flex-1 flex-col items-center gap-0.5 rounded-lg py-2 text-[10px] transition',
-                    isActive ? 'bg-primary/10 font-semibold text-primary' : 'text-muted-foreground',
-                  )
-                }
-              >
-                <span className="relative">
-                  <Icon size={18} />
-                  {t.to === '/matches' && mutualCount > 0 && (
-                    <span className="absolute -right-2 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] text-primary-foreground">
-                      {mutualCount}
-                    </span>
-                  )}
-                </span>
-                {t.label}
-              </NavLink>
-            )
-          })}
-        </div>
-      </nav>
-      <div className="h-14 md:hidden" />
+      {/* 登录后的移动端仅保留四个核心任务入口 */}
+      {me && (
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-gold/25 bg-background/95 backdrop-blur md:hidden">
+          <div className="mx-auto flex max-w-md items-stretch justify-between px-2 pb-[env(safe-area-inset-bottom)]">
+            {MOBILE_TABS.filter(t => !t.feat || featureOn(t.feat)).map(t => {
+              const Icon = t.icon
+              return (
+                <NavLink
+                  key={t.to}
+                  to={t.to}
+                  end={t.to === '/'}
+                  className={({ isActive }) =>
+                    cn(
+                      'relative mx-0.5 flex flex-1 flex-col items-center gap-0.5 rounded-lg py-2 text-[10px] transition',
+                      isActive ? 'bg-primary/10 font-semibold text-primary' : 'text-muted-foreground',
+                    )
+                  }
+                >
+                  <span className="relative">
+                    <Icon size={18} />
+                    {t.to === '/matches' && mutualCount > 0 && (
+                      <span className="absolute -right-2 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] text-primary-foreground">
+                        {mutualCount}
+                      </span>
+                    )}
+                  </span>
+                  {t.label}
+                </NavLink>
+              )
+            })}
+          </div>
+        </nav>
+      )}
+      {me && <div className="h-14 md:hidden" />}
       {/* 缘阶晋升贺窗: 全站挂载, 自己的缘阶升上去时弹一次 */}
       <LevelUpCelebration />
     </div>

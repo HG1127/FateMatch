@@ -1,5 +1,6 @@
 import { Heart, MessageCircle } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { toast } from 'sonner'
+import { useStore } from '@/lib/store-context'
 import type { Post, User } from '@/lib/store'
 import { AvatarFrame, NickName } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -50,7 +51,7 @@ export function PostTile({ post, onOpen, onProfile, fresh }: { post: Post; onOpe
           <span className="shrink-0 rounded-sm bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground/70">{post.topic}</span>
           <button
             className={cn('inline-flex shrink-0 items-center gap-1 text-xs transition active:scale-90', liked ? 'text-primary' : 'text-muted-foreground hover:text-primary')}
-            onClick={() => togglePostLike(post.id)}
+            onClick={() => { void togglePostLike(post.id).catch(e => toast.error(e instanceof Error ? e.message : '点赞未保存,请重试')) }}
             aria-label="心动"
           >
             <Heart size={13} className={liked ? 'fill-current' : ''} />

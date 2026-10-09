@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { BadgeCheck, Loader2, LocateFixed } from 'lucide-react'
 import { toast } from 'sonner'
-import { INTERESTS } from '@/lib/store'
+import { INTERESTS } from '@/lib/store-model'
 import { cityToken, locateRegion, provinceOfCity, PROVINCES, rawCityOf } from '@/lib/region'
 import { Tag } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
-export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTag, verifiedOnly, toggleVerifiedOnly }: {
+export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTag, verifiedOnly, toggleVerifiedOnly, ageMin, ageMax, setAgeMin, setAgeMax }: {
   city: string
   setCity: (c: string) => void
   district: string
@@ -15,6 +15,10 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
   toggleTag: (t: string) => void
   verifiedOnly: boolean
   toggleVerifiedOnly: () => void
+  ageMin: string
+  ageMax: string
+  setAgeMin: (value: string) => void
+  setAgeMax: (value: string) => void
 }) {
   const [prov, setProv] = useState(() => provinceOfCity(city))
   const [cty, setCty] = useState(() => rawCityOf(city))
@@ -89,7 +93,13 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
           <option value="">{cityNode ? `${cityToken(cty, prov)} · 不限区县` : '先选城市'}</option>
           {districts.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
-        <span className="ml-auto hidden text-xs text-muted-foreground sm:block">同城优先 · 按契合度由高到低排列</span>
+        <span className="ml-auto hidden text-xs text-muted-foreground sm:block">同城优先 · 当前页按规则参考排序</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3 text-xs">
+        <span className="font-semibold text-muted-foreground">年龄偏好</span>
+        <label className="flex items-center gap-2">从 <input aria-label="最低年龄" type="number" min="18" max="100" inputMode="numeric" className="input-cn !w-20 !py-1" placeholder="18" value={ageMin} onChange={e => setAgeMin(e.target.value)} /> 岁</label>
+        <label className="flex items-center gap-2">到 <input aria-label="最高年龄" type="number" min="18" max="100" inputMode="numeric" className="input-cn !w-20 !py-1" placeholder="不限" value={ageMax} onChange={e => setAgeMax(e.target.value)} /> 岁</label>
+        <span className="text-muted-foreground">可选；仅影响本次筛选</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold tracking-widest text-muted-foreground">兴趣</span>
@@ -98,13 +108,15 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
         ))}
         <button
           onClick={toggleVerifiedOnly}
+          disabled
+          title="手机、实名和本人照片核验尚未接入，筛选暂不可用"
           className={cn(
-            'ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-xs transition',
+            'ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-xs transition opacity-60 cursor-not-allowed',
             verifiedOnly ? 'border-gold bg-gold/15 text-gold' : 'border-border text-foreground/70 hover:border-gold/40',
           )}
         >
           <BadgeCheck size={12} />
-          只看三重验证
+          核验筛选（待开放）
         </button>
       </div>
     </div>

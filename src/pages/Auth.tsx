@@ -20,6 +20,8 @@ export function AuthPage() {
   const [name, setName] = useState('')
   const [pwd, setPwd] = useState('')
   const [pwd2, setPwd2] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [adultConfirmed, setAdultConfirmed] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const submit = async () => {
@@ -32,17 +34,22 @@ export function AuthPage() {
     setBusy(true)
     try {
       if (mode === 'register') {
+        if (!adultConfirmed) {
+          toast('请先确认已满 18 周岁')
+          return
+        }
         if (pwd !== pwd2) {
           toast('两次输入的密码不一致')
           return
         }
-        await registerLocalAccount(em, pwd, name.trim() || undefined)
+        await registerLocalAccount(em, pwd, name.trim() || undefined, adultConfirmed)
         toast.success('注册成功,欢迎来到随缘网')
-        nav('/')
+        nav('/me')
       } else {
         await loginLocalAccount(em, pwd)
         toast.success('登录成功,别来无恙')
-        nav(params.get('from') || '/')
+        const from = params.get('from') || '/'
+        nav(from.startsWith('/') && !from.startsWith('//') && !from.includes('\\') ? from : '/')
       }
     } catch (e) {
       // 限流/锁定(429)与账号停用(403)透出服务端的具体提示，其余保持产品语兜底
@@ -77,37 +84,55 @@ export function AuthPage() {
           ))}
         </div>
         <div className="space-y-3">
-          <input className="input-cn" type="email" placeholder="邮箱" value={email} onChange={e => setEmail(e.target.value)} />
+          <label className="block text-left">
+            <span className="mb-1.5 block text-xs font-semibold tracking-wider text-foreground/70">邮箱</span>
+            <input className="input-cn" type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={e => setEmail(e.target.value)} />
+          </label>
           {mode === 'register' && (
-            <input className="input-cn" placeholder="昵称(可不填,默认为邮箱前缀)" value={name} onChange={e => setName(e.target.value)} maxLength={12} />
+            <label className="block text-left">
+              <span className="mb-1.5 block text-xs font-semibold tracking-wider text-foreground/70">昵称（可稍后修改）</span>
+              <input className="input-cn" autoComplete="nickname" placeholder="不填则使用邮箱前缀" value={name} onChange={e => setName(e.target.value)} maxLength={12} />
+            </label>
           )}
-          <input
-            className="input-cn"
-            type="password"
-            placeholder={mode === 'register' ? '密码(至少 8 位)' : '密码'}
-            value={pwd}
-            onChange={e => setPwd(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && void submit()}
-          />
-          {mode === 'register' && (
+          <label className="block text-left">
+            <span className="mb-1.5 block text-xs font-semibold tracking-wider text-foreground/70">密码</span>
             <input
               className="input-cn"
-              type="password"
-              placeholder="再输一次密码"
-              value={pwd2}
-              onChange={e => setPwd2(e.target.value)}
+              type={showPassword ? 'text' : 'password'}
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              placeholder={mode === 'register' ? '至少 8 位' : '输入密码'}
+              value={pwd}
+              onChange={e => setPwd(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && void submit()}
             />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={showPassword} onChange={e => setShowPassword(e.target.checked)} />显示密码</label>
+          {mode === 'register' && (
+            <label className="block text-left">
+              <span className="mb-1.5 block text-xs font-semibold tracking-wider text-foreground/70">确认密码</span>
+              <input
+                className="input-cn"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                placeholder="再次输入密码"
+                value={pwd2}
+                onChange={e => setPwd2(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && void submit()}
+              />
+            </label>
           )}
           {mode === 'register' && (
-            <p className="text-[11px] text-muted-foreground">首个注册的账号将成为掌柜,可进入后台打理全站。</p>
+            <label className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+              <input type="checkbox" className="mt-0.5" checked={adultConfirmed} onChange={e => setAdultConfirmed(e.target.checked)} />
+              <span>我确认已满 18 周岁，并理解注册后仍需本人确认必要资料才会进入推荐池。</span>
+            </label>
           )}
           <button className="btn-primary w-full !py-2.5 disabled:opacity-50" disabled={busy} onClick={() => void submit()}>
-            {busy ? '请稍候…' : mode === 'register' ? '注册并登录' : '登录'}
+            {busy ? '请稍候…' : mode === 'register' ? '注册并继续完善资料' : '登录'}
           </button>
         </div>
       </div>
-      <p className="mt-6 text-center text-xs text-muted-foreground">随缘网仅面向 18 周岁以上成年人 · 资料隐私全程保护</p>
+      <p className="mt-6 text-center text-xs text-muted-foreground">随缘网仅面向 18 周岁以上成年人 · 核验与隐私范围以实际功能和规则为准</p>
     </div>
   )
 }

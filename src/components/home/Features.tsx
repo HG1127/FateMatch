@@ -2,12 +2,12 @@ import { CalendarHeart, Camera, HeartHandshake, MessagesSquare, ShieldCheck, Spa
 import { SectionHead } from '@/components/ui'
 
 const FEATURES = [
-  { icon: ShieldCheck, title: '资料三重验证', desc: '手机、实名、头像三重审核,徽章外显,杜绝虚假资料,让每一次相识都建立在真实之上。' },
-  { icon: Sparkles, title: '每日随缘分配', desc: '每日为你甄选三位有缘人,不刷屏、不海投,把相遇的节奏交给缘分,也交给认真。' },
-  { icon: HeartHandshake, title: '兴趣爱好匹配', desc: '以兴趣标签与契合度算法寻得知音,诗茶书画、山海湖光,同好之人自然相近。' },
-  { icon: CalendarHeart, title: '活动牵线', desc: '诗会、登高、桌游、汉服夜游,小组主题活动把匹配落到真实场景,同席自然同心。' },
-  { icon: MessagesSquare, title: '社区分享', desc: '见字如面,先读其文再识其人;为心动递一句回帖,从共鸣走向相识。' },
-  { icon: Camera, title: '照片资料展示', desc: '上传生活照展示真实自我,山水行迹、灯下日常,让对方看见立体而真诚的你。' },
+  { icon: ShieldCheck, title: '核验状态如实展示', desc: '已完成的核验按实际记录展示；未接入能力不会模拟通过，未核验信息也不作平台背书。' },
+  { icon: Sparkles, title: '每日少量推荐', desc: '从当前满足双方必要条件的候选中给出少量推荐；供给不足时如实说明，不用演示账号凑数。' },
+  { icon: HeartHandshake, title: '兴趣与城市参考', desc: '用共同兴趣、城市等本人确认的信息作为推荐参考，不把规则分数包装成关系成功概率。' },
+  { icon: CalendarHeart, title: '活动牵线', desc: '诗会、登高、桌游、汉服夜游等小组活动，把线上了解延伸到真实、可选择的见面场景。' },
+  { icon: MessagesSquare, title: '双方有意后交流', desc: '只有双方真实表达「有意」后才开启佳音，不由系统冒充会员制造回复、已读或互动。' },
+  { icon: Camera, title: '本人资料展示', desc: '资料由本人填写并可持续修改；未填写的个人事实保持未知，不由系统代填成既定事实。' },
 ]
 
 export function Features() {
@@ -28,9 +28,9 @@ export function Features() {
 
       <div className="mt-16 grid gap-6 md:grid-cols-3">
         {[
-          { no: '壹', t: '注册并验证', d: '填写基础资料,完成三重验证,领取专属缘字徽章。' },
-          { no: '贰', t: '收取今日缘分', d: '每日随缘分配三位有缘人,心动便道一声「有意」。' },
-          { no: '叁', t: '结一段良缘', d: '双方有意即结佳音,从一句问候开始,慢慢相识。' },
+          { no: '壹', t: '确认必要资料', d: '本人确认性别、希望认识对象、出生日期与城市后，才进入真人推荐池。' },
+          { no: '贰', t: '查看今日推荐', d: '从满足当前双方必要条件的真人候选中，查看少量推荐与共同点。' },
+          { no: '叁', t: '双方有意再交流', d: '双方真实表达「有意」后才开启佳音，从本人确认的一句话开始慢慢认识。' },
         ].map(s => (
           <div key={s.no} className="flex gap-4 rounded-lg border border-border bg-card/60 p-5">
             <span className="seal h-11 w-11 shrink-0 font-xing text-xl">{s.no}</span>

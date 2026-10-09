@@ -4,8 +4,7 @@
 // 会话由 PocketBase SDK 的 authStore 管理（localStorage 持久化 + 自动携带
 // Authorization），业务代码禁止自己存取 token。
 //
-// 注意：只在函数体内使用 pb（pb.ts ← auth.ts ← 本文件 存在模块环，模块顶层
-// 取 pb 会拿到未初始化的绑定）。
+// pb.ts 已独立处理 SDK 自身鉴权头，本文件只提供账号操作与供其他平台 lib 使用的鉴权头。
 
 import { pb, getBasename } from "./pb"
 
@@ -45,12 +44,14 @@ export function onLocalAccountChange(
 export async function registerLocalAccount(
   email: string,
   password: string,
-  name?: string,
+  name: string | undefined,
+  adultConfirmed: boolean,
 ): Promise<LocalAccount> {
   await pb.collection("users").create({
     email,
     password,
     passwordConfirm: password,
+    adultConfirmed,
     ...(name ? { name } : {}),
   })
   return loginLocalAccount(email, password)
@@ -64,6 +65,14 @@ export async function loginLocalAccount(email: string, password: string): Promis
 }
 
 export function logoutLocalAccount(): void {
+  pb.authStore.clear()
+}
+
+/** 永久注销当前账号。服务端会在同一事务中清理本人资料与本人拥有的业务数据。 */
+export async function deleteLocalAccount(): Promise<void> {
+  const account = getLocalAccount()
+  if (!account) throw new Error('请先登录')
+  await pb.collection('users').delete(account.id)
   pb.authStore.clear()
 }
 

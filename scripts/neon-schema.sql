@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS events (
   "creator_sid" text,
   "requirements" text,
   "pinned" boolean,
+  "venue" text,
+  "cost_note" text,
+  "cancel_note" text,
   "images" jsonb,
   created timestamptz NOT NULL DEFAULT now(),
   updated timestamptz NOT NULL DEFAULT now(),
@@ -283,6 +286,11 @@ CREATE TABLE IF NOT EXISTS reports (
   "note" text,
   "status" text,
   "at" double precision,
+  "resolution" text,
+  "resolved_at" double precision,
+  "appeal_note" text,
+  "appeal_at" double precision,
+  "appeal_status" text,
   created timestamptz NOT NULL DEFAULT now(),
   updated timestamptz NOT NULL DEFAULT now(),
   synced_at timestamptz NOT NULL DEFAULT now()
@@ -390,3 +398,35 @@ CREATE TABLE IF NOT EXISTS security_events (
 );
 CREATE INDEX IF NOT EXISTS idx_security_events_at ON security_events ("at" DESC);
 CREATE INDEX IF NOT EXISTS idx_security_events_type ON security_events ("type");
+
+-- v1.13 真实试点最小遥测：只记录服务端实际下发的人物推荐，不记录点击、停留时长或正文。
+-- viewer/target/source/day 唯一，避免刷新/重试放大曝光；原始明细最多保留 35 天，仅掌柜读聚合指标。
+-- 本表不挂通用 collection 权限，任何身份都不能通过 /api/collections 直接枚举明细。
+CREATE TABLE IF NOT EXISTS discovery_exposures (
+  id text PRIMARY KEY,
+  "viewer_sid" text NOT NULL,
+  "target_sid" text NOT NULL,
+  "source" text NOT NULL,
+  "day" text NOT NULL,
+  "at" double precision NOT NULL,
+  created timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_discovery_exposures_daily
+  ON discovery_exposures ("viewer_sid", "target_sid", "source", "day");
+CREATE INDEX IF NOT EXISTS idx_discovery_exposures_created ON discovery_exposures (created DESC);
+CREATE INDEX IF NOT EXISTS idx_discovery_exposures_target_day ON discovery_exposures ("target_sid", "day");
+
+-- v1.13 关系结果反馈：每人对每个互配对象只保留当前选择，不保留历史版本，也不收文字备注。
+-- 原始行不挂通用 collection 权限；本人只能经 messaging 专用端点读取/修改自己的选择。
+CREATE TABLE IF NOT EXISTS relationship_feedback (
+  id text PRIMARY KEY,
+  "owner_sid" text NOT NULL,
+  "other_sid" text NOT NULL,
+  "outcome" text NOT NULL CHECK ("outcome" IN ('continue', 'pause')),
+  "at" double precision NOT NULL,
+  created timestamptz NOT NULL DEFAULT now(),
+  updated timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relationship_feedback_pair
+  ON relationship_feedback ("owner_sid", "other_sid");
+CREATE INDEX IF NOT EXISTS idx_relationship_feedback_updated ON relationship_feedback (updated DESC);
