@@ -1,0 +1,31 @@
+# OPTIONAL test-only Node API host (not suitable for real profile photo retention).
+# Free Render services lose all locally uploaded files after sleep/redeploy.
+# Deploy only against a SEPARATE staging Neon database with disposable test users.
+services:
+  - type: web
+    name: suiyuan-staging-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: singapore
+    autoDeployTrigger: off
+    healthCheckPath: /api/ready
+    envVars:
+      - key: STAGING_MODE
+        value: "1"
+      - key: NEON_SCHEMA
+        value: staging_render_preview
+      - key: NEON_DSN
+        sync: false
+      # Render Free has NO persistent disk. Reject media uploads rather than lose people's photos.
+      - key: SUIYUAN_EPHEMERAL_PREVIEW
+        value: "1"
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+      - key: HOST
+        value: 0.0.0.0
+      - key: UPLOAD_DIR
+        value: /var/lib/suiyuan/uploads

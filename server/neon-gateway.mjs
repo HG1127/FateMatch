@@ -25,6 +25,7 @@ import { createAdminHandlers } from './domains/admin.mjs'
 import { createStaticSiteHandler } from './static-site.mjs'
 import { createClientIpResolver } from './client-ip.mjs'
 import { registerIdlePoolErrorHandler } from './db-pool-health.mjs'
+import { mayStoreUpload } from './upload-preview-policy.mjs'
 
 const PORT = Number(process.env.PORT ?? 7000)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -1677,6 +1678,7 @@ const server = http.createServer(async (req, res) => {
 
     // 图片上传（登录成员）与读取（文件名不可猜测，凭 URL 访问）
     if ((path === '/api/uploads' || path === '/api/uploads/') && req.method === 'POST') {
+      if (!mayStoreUpload(process.env)) throw new HttpErr(503, '免费预览环境未启用持久图片存储，请勿上传真人照片')
       return send(res, 200, await handleUpload(await readBody(req), auth))
     }
     m = path.match(/^\/api\/uploads\/([^/]+)$/)

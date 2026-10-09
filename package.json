@@ -15,6 +15,7 @@
     "staging:check": "node scripts/staging-preflight.mjs",
     "staging:migrate": "node scripts/staging-migrate.mjs",
     "staging:smoke": "node scripts/staging-smoke.mjs",
+    "vercel:check": "node scripts/vercel-check.mjs",
     "uploads:gc": "node scripts/upload-gc.mjs",
     "uploads:migrate": "node scripts/upload-migrate.mjs",
     "build": "tsc -b && vite build",

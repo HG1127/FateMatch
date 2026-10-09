@@ -103,8 +103,8 @@ const localFullstackProxy = process.env.LOCAL_FULLSTACK === '1'
   : undefined
 
 export default defineConfig({
-  // 预览可能挂在任意路径前缀下, 资源一律走相对路径
-  base: './',
+  // VibeX dev-source keeps relative assets under its subpath. Vercel SPA deep links need /assets/ URLs.
+  base: process.env.SUIYUAN_VERCEL_FRONTEND === '1' ? '/' : './',
   plugins: [rhSourcePlugin(), errLogPlugin(), react()],
   resolve: {
     alias: {

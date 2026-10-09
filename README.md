@@ -59,6 +59,17 @@ pnpm staging:smoke                        # 本地 127.0.0.1:8081 只读健康/�
 
 交付与闸门：`docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`。
 
+## Vercel 前端 + 独立 Node 后端（方案 A）
+
+已增加 `vercel.mjs`、`render.yaml` 和专门测试：Vercel 承载 React 静态前端，`/__pb/*`、`/api/*` 反向代理到独立 HTTPS Node Gateway；Node 只读取隔离 Neon staging 数据库。Vercel 前端**不配置数据库密码**。
+
+- Vercel Preview 环境变量需显式设置 `SUIYUAN_DEPLOY_MODE=staging`、`SUIYUAN_BACKEND_ORIGIN=https://<真实 Staging 后端>`；缺少配置时部署失败而不是静默连接正式站点。
+- `node scripts/vercel-build.mjs` 为 Vercel 构建根路径资源，原 VibeX 的相对资源路径不变。`pnpm vercel:check` 仅对已构建静态文件和转发配置进行只读自检。
+- `render.yaml` 可选 Render Free 单实例，**仅用于合成测试数据**；其文件系统不持久，已显式禁止免费预览模式上传会员照片。真实受邀用户试点必须换成持久化图片存储并进行访问保护和隐私验收。
+- 本次代码准备**不会自动创建 Vercel 或 Render 公网项目**，需要先连接对应云平台账户、创建独立 Staging 数据库与配置授权。
+
+完整执行步骤：`docs/22-Vercel前端与独立Node预发布部署.md`。
+
 ## 生产：独立同源前后端
 
 ```bash
@@ -92,4 +103,4 @@ IP 限流默认仅信任真实 socket 对端。若确有反向代理，才可通
 - `public` 迁移、数据清除/恢复、发布覆盖均须先备份并独立验收；日常测试只使用临时隔离 schema。
 - 每次发布前均应检查 Git 工作区、代码保密规则与部署版本；禁止未经审查执行 `git add .`、整库强制覆盖或删除正式回归测试。
 
-**继续阅读：** `docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`、`docs/18-完整前后端发布候选与运维交接.md`、`docs/17-完整前后端生产部署与验收.md`、`docs/12-发布与回退手册.md`。
+**继续阅读：** `docs/22-Vercel前端与独立Node预发布部署.md`、`docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`、`docs/18-完整前后端发布候选与运维交接.md`、`docs/12-发布与回退手册.md`。
