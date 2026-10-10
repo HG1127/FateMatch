@@ -1,0 +1,5 @@
+# 将 Neon 控制台【suiyuan-staging → staging → suiyuan_staging → suiyuan_staging_owner】的连接串粘贴在自己电脑上
+# 复制为 china-staging.local（已经通过 *.local 加入 .gitignore），绝不要发送到聊天或提交 Git
+NEON_DSN=postgresql://suiyuan_staging_owner:YOUR_PASSWORD@YOUR_HOST.neon.tech/suiyuan_staging?sslmode=require
+NEON_SCHEMA=staging_render_preview
+STAGING_MODE=1
