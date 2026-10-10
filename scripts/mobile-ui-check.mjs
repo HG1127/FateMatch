@@ -133,6 +133,29 @@ try {
   const iconResponse = await fetch(origin + '/icons/icon-192.png')
   assert(iconResponse.ok && iconResponse.headers.get('content-type')?.includes('image/png'),
     'Built homescreen PNG is served with the correct content type')
+  // Regression: when an unauthenticated phone loses the data API, the website
+  // must clearly label demo content, offer retry, and never issue database writes.
+  const offline = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  })
+  await registerMocks(offline)
+  await offline.route('**/api/collections/site_settings/records*', route =>
+    route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ message: 'Staging backend temporarily unavailable' }) }))
+  const offlinePage = await offline.newPage()
+  const offlineWrites = []
+  offlinePage.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/') &&
+        !['GET', 'HEAD'].includes(request.method())) offlineWrites.push(request.method())
+  })
+  await offlinePage.goto(origin + '/', { waitUntil: 'domcontentloaded' })
+  await offlinePage.getByRole('status', { name: '业务数据连接状态' }).waitFor({ state: 'visible', timeout: 20000 })
+  await offlinePage.getByRole('button', { name: '重新检查数据连接' }).waitFor()
+  await checkWidth(offlinePage, { width: 390 }, 'guest-offline')
+  assert(offlineWrites.length === 0, 'Offline guest must not write any database data')
+  console.log('PASS offline mobile guest: explicit demo warning, retry control, no writes')
+  await offline.close()
+
   for (const screen of sizes) {
     const option = { viewport: screen, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
     const guest = await browser.newContext(option)

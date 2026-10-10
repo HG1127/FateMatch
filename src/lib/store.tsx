@@ -220,6 +220,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setBootError('')
       } catch (e) {
         if (!alive) return
+        if (!account) {
+          // Guest fallback is demonstration-only. Never pretend an offline database is live;
+          // never seed demo profiles/posts into Neon or enable member save operations.
+          try {
+            const demo = await import('./store-seeds')
+            if (!alive) return
+            setUsers(demo.seedUsers())
+            setPosts(demo.seedPosts())
+            setEvents(demo.seedEvents())
+            setDigests(demo.seedDigests())
+          } catch { /* status banner still shows and writes stay disabled */ }
+        }
         const msg = e instanceof Error ? e.message : String(e)
         const status = (e as { status?: number } | null)?.status
         setDataReady(!account)
@@ -234,8 +246,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           toast.error('登录状态已失效,请重新登录')
         } else if (status === 403) {
           toast.error('部分数据无访问权限,已暂停自动保存,请联系管理员')
+        } else if (!account) {
+          toast.error('测试站数据服务未连接：当前仅显示演示内容，登录和聊天可能不可用')
         } else {
-          toast.error('数据加载失败,已暂停自动保存,稍后可刷新重试')
+          toast.error('数据服务暂不可用，已暂停保存，请检查连接后重试')
         }
       }
       if (alive) setBooted(true)

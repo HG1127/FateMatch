@@ -55,9 +55,9 @@ pnpm mobile:check  # 无数据库凭据，合成浏览器模拟 320/375/390/430/
 
 ## 中国大陆免费手机预览（独立、受口令保护）
 
-本分支 `feat/china-mobile-preview` 增加本地 127.0.0.1:8611 受口令保护的移动测试网关。由于当前 Windows 网络已实测 Render HTTPS 握手超时，**优先使用 `pnpm china:preview:local`**：它启动自建 Node 后端，仅允许专用 `suiyuan_staging` Neon 数据库的 Staging 角色和 schema（用户须自行将连接串保存在 Git 忽略的 `china-staging.local`，不能自动从连接器复制密钥）。8611 提供前端和同源 API，8622 仅本机后端；图片上传被拒绝。原 `pnpm china:preview` 仍保留为 Render 代理诊断方案，但不保证在大陆可用。曾尝试的 Cloudflare Quick Tunnel 申请超时；建议使用自行授权的 cpolar Free 随机 HTTPS 入口，并在大陆手机关闭 VPN 实测。
+本分支 `feat/china-mobile-preview` 增加本地 127.0.0.1:8611 受口令保护的移动测试网关。由于当前 Windows 网络已实测 Render HTTPS 握手超时，**默认使用 `pnpm china:preview`**：它启动自建 Node 后端，仅允许专用 `suiyuan_staging` Neon 数据库的 Staging 角色和 schema（用户须自行将连接串保存在 Git 忽略的 `china-staging.local`，不能自动从连接器复制密钥）。8611 提供前端和同源 API，8622 仅本机后端；图片上传被拒绝。旧 Render 代理已更名为 `pnpm china:preview:render`，启动前会检查远端 `/api/ready`，连接超时将拒绝启动，避免再次出现“只有网页、数据加载失败”的半可用状态。曾尝试的 Cloudflare Quick Tunnel 申请超时；建议使用自行授权的 cpolar Free 随机 HTTPS 入口，并在大陆手机关闭 VPN 实测。
 
-启动：`pnpm build` → 根据 `china-staging.example` 在自己电脑上创建 `china-staging.local`（必须来自独立 Neon Staging）→ `pnpm china:preview:local`；确认 8611 本机就绪后才创建 cpolar HTTPS 隧道。无需数据库凭据的安全测试：`pnpm china:preview:check`。详见 `docs/25-中国大陆手机免费临时预览.md`。**绝不要把数据库 DSN、cpolar Token 或预览口令发到聊天或 GitHub。**
+启动：`pnpm build` → 根据 `china-staging.example` 在自己电脑上创建 `china-staging.local`（必须来自独立 Neon Staging）→ `pnpm china:preview`；另可使用 `pnpm china:doctor` 只读检查配置、8611/8622 API 和 cpolar 服务，确认都就绪后才创建 cpolar HTTPS 隧道。无需数据库凭据的安全测试：`pnpm china:preview:check`。详见 `docs/25-中国大陆手机免费临时预览.md`。**绝不要把数据库 DSN、cpolar Token 或预览口令发到聊天或 GitHub。**
 
 ## 预发布与手机/真人试点（独立 staging）
 

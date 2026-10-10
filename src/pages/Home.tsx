@@ -356,6 +356,18 @@ export function HomePage() {
   }
   return (
     <>
+      {!account && booted && bootError && (
+        <section role="status" aria-label="业务数据连接状态" className="border-b border-amber-400/50 bg-amber-50 px-4 py-3">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
+            <p className="text-sm leading-relaxed text-amber-950">
+              数据接口暂时不可用，当前显示的是演示内容，不代表真实会员数据。注册、匹配和聊天需等后端连接恢复。
+            </p>
+            <button type="button" className="btn-outline min-h-11 !px-4 text-sm" onClick={retryBoot}>
+              重新检查数据连接
+            </button>
+          </div>
+        </section>
+      )}
       <Announcement />
       <FestivalBanner />
       <Hero />

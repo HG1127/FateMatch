@@ -38,6 +38,7 @@ function serveStore(data?: {
   const writes: string[] = []
   const profileRows = [...(data?.profiles ?? [{ id: 'p1', sid: 'member-a', nickname: '远端会员', role: '' }])]
   let failStatus = 0
+  let failSettingsStatus = 0
   let failWriteStatus = 0
   let pending: Promise<Response> | null = null
   vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -216,6 +217,7 @@ function serveStore(data?: {
       return Response.json(record)
     }
     if (collection === 'profiles' && pending) return pending
+    if (collection === 'site_settings' && failSettingsStatus) return Response.json({ message: 'Service temporarily unavailable' }, { status: failSettingsStatus })
     if (collection === 'profiles' && failStatus) return Response.json({ message: 'Read failed', data: {} }, { status: failStatus })
     const items = collection === 'profiles'
       ? profileRows
@@ -251,6 +253,7 @@ function serveStore(data?: {
   return {
     writes,
     fail: (status: number) => { failStatus = status },
+    failSettings: (status: number) => { failSettingsStatus = status },
     failWrite: (status: number) => { failWriteStatus = status },
     defer: (response: Promise<Response>) => { pending = response },
   }
@@ -305,6 +308,26 @@ describe('初始化完成前禁止自动保存', () => {
     expect(api.writes).toEqual([])
     expect(screen.queryByText(/数据库连接失败/)).toBeNull()
     if (status === 403) expect(screen.getByText(/权限/)).toBeTruthy()
+  })
+
+  it('游客启动时 API 暂时失败：显示演示数据与可重试状态，不写入任何数据库', async () => {
+    const api = serveStore()
+    api.failSettings(500)
+    // Preload async visitor demo module so React's effect can finish deterministically.
+    await import('./store-seeds')
+    const { result } = renderHook(useStore, { wrapper })
+    for (let i = 0; i < 5 && !result.current.booted; i++) await settle()
+    expect(result.current.booted).toBe(true)
+    expect(result.current.dataReady).toBe(true)
+    expect(result.current.bootError).toBeTruthy()
+    expect(result.current.account).toBeNull()
+    expect(result.current.users.length).toBeGreaterThan(0)
+    expect(api.writes).toEqual([])
+    api.failSettings(0)
+    act(() => result.current.retryBoot())
+    await settle()
+    expect(result.current.bootError).toBe('')
+    expect(api.writes).toEqual([])
   })
 
   it('新账号只创建本人 profile，不把演示世界灌入真人数据库', async () => {

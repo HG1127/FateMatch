@@ -216,6 +216,20 @@ export function createChinaPreviewServer({secret,upstream=STAGING_ORIGIN,staticD
   })
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+  // Explicit Render-only diagnostic mode, not the default mobile test launcher.
+  // Fail closed if Render cannot serve a real database-backed API.
+  let renderReady=false
+  try{
+    const upstream=await fetch(STAGING_ORIGIN+'/api/ready',{
+      redirect:'manual',signal:AbortSignal.timeout(11000),
+    })
+    renderReady=upstream.status===200
+    await upstream.body?.cancel()
+  }catch{}
+  if(!renderReady){
+    console.error('[china-preview] Render API 未就绪，拒绝启动仅有前端的假预览。请运行 pnpm china:preview（本地完整测试模式）。')
+    process.exit(2)
+  }
   const port=Number(process.env.SUIYUAN_CHINA_PREVIEW_PORT??8611)
   if(!Number.isSafeInteger(port)||port<1024||port>65535)throw new Error('本地端口不合法')
   const secret=loadOrCreatePreviewSecrets()
@@ -223,7 +237,7 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
   server.listen(port,'127.0.0.1',()=>{
     console.log('[china-preview] 本机已启动 http://127.0.0.1:'+port)
     console.log('[china-preview] 私密口令位于 Git 忽略文件 china-preview.local（不输出口令）')
-    console.log('[china-preview] 固定指向隔离 Render Staging 后端；禁止真实个人信息/照片')
+    console.log('[china-preview] 仅用于 Render 网络连通诊断；日常手机测试请使用 pnpm china:preview')
   })
   process.on('SIGINT',()=>server.close())
   process.on('SIGTERM',()=>server.close())
