@@ -53,6 +53,12 @@ pnpm mobile:check  # 无数据库凭据，合成浏览器模拟 320/375/390/430/
 
 详见 `docs/24-随缘网移动端适配与验收.md`。移动端适配与中国大陆免 VPN 网络可达性是两个独立问题，不能混为一谈。
 
+## 中国大陆免费手机预览（独立、受口令保护）
+
+本分支 `feat/china-mobile-preview` 增加本地 127.0.0.1:8611 网关：从 `dist/` 提供优化后的 React 网站，将 `/api/*` 限定代理到现有 Render Staging。网页和接口均须通过独立临时访问口令，不允许匿名绕过网关访问私人 API。访问口令只写入 Git 忽略的 `china-preview.local`；图片上传被拒绝。可用已安装的 Cloudflare Quick Tunnel 尝试临时 HTTPS 公网入口，若国内网络打不开，再自行连接 cpolar Free 隧道；**两者的中国大陆免 VPN 可访问性必须由手机实测**。
+
+启动：先 `pnpm build`，再 `pnpm china:preview`。独立安全测试：`pnpm china:preview:check`。具体操作和国内网络限制见 `docs/25-中国大陆手机免费临时预览.md`。不要把账号/token/口令写进聊天、源码或 README。
+
 ## 预发布与手机/真人试点（独立 staging）
 
 预发布必须配置**独立 Neon 数据库及 staging_* schema**，并通过受限 HTTPS 入口访问；严禁让测试人员访问正式 public 数据。工程已提供：

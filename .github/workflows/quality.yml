@@ -32,6 +32,8 @@ jobs:
         run: pnpm build
       - name: Standalone platform independence check
         run: pnpm standalone:check
+      - name: China mobile preview access security (mocked upstream, no database)
+        run: pnpm china:preview:check
       - name: Install Chromium for mobile synthetic regression
         run: pnpm exec playwright install --with-deps chromium
       - name: Mobile UX browser regression (mocked API, no Neon credentials)
