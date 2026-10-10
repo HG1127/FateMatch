@@ -30,6 +30,8 @@ jobs:
         run: pnpm test
       - name: Build + typecheck
         run: pnpm build
+      - name: Standalone platform independence check
+        run: pnpm standalone:check
       - name: Build Vercel static frontend and validate split routing without calling a backend
         env:
           SUIYUAN_DEPLOY_MODE: staging
@@ -37,7 +39,8 @@ jobs:
           VERCEL_ENV: preview
         run: |
           node scripts/vercel-build.mjs
-          pnpm vercel:check          test -f vercel.ts && test ! -f vercel.mjs
+          pnpm vercel:check
+          test -f vercel.ts && test ! -f vercel.mjs
       - name: Gateway syntax
         run: node --check server/neon-gateway.mjs
       - name: Discover Playwright tests without connecting to Neon

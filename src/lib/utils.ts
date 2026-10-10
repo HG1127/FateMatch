@@ -16,16 +16,14 @@ export function fmtTime(at: number): string {
 }
 
 
-
-/** 把前端运行时错误上报到服务日志, 便于排查预览白屏 */
+/**
+ * 客户端异常仅记在浏览器控制台。旧 /__err Vite 插件会把堆栈拼在 URL，
+ * 可能携带用户信息；独立版不再向服务器传输和持久化这类内容。
+ */
 export function reportErr(tag: string, e: unknown) {
-  try {
-    const err = e as Error & { componentStack?: string }
-    const stack = err && err.stack ? err.stack.split('\n').slice(0, 10).join(' / ') : ''
-    const comp = err && err.componentStack ? err.componentStack.split('\n').slice(0, 8).join(' > ') : ''
-    const msg = `${err && err.message ? err.message : String(e)} | ${stack} | COMP:${comp}`
-    fetch(`./__err?m=${encodeURIComponent(`[${tag}] ${msg}`.slice(0, 3800))}`).catch(() => {})
-  } catch {
-    /* ignore */
+  if (import.meta.env.DEV) {
+    console.error('[随缘网] 前端异常', tag, e)
+  } else {
+    console.error('[随缘网] 页面运行异常', tag)
   }
 }

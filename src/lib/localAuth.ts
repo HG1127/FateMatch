@@ -1,13 +1,7 @@
-// 自建账号登录实现（auth 槽位提供方）。账号存应用自己的 PocketBase `users`
-// 认证集合，注册/登录/会话全部走 `./pb` 的 __pb 代理，无外部账号体系依赖。
-//
-// 会话由 PocketBase SDK 的 authStore 管理（localStorage 持久化 + 自动携带
-// Authorization），业务代码禁止自己存取 token。
-//
-// pb.ts 已独立处理 SDK 自身鉴权头，本文件只提供账号操作与供其他平台 lib 使用的鉴权头。
-
-import { pb, getBasename } from "./pb"
-
+// 独立版账号：自建 Node 网关 + Neon PostgreSQL，SDK 只是客户端兼容层。
+// 注册、登录、注销均走同源 /api；会话由 SDK authStore 管理。
+import { pb } from './pb'
+import { authorizationHeaders } from './pb-auth'
 export interface LocalAccount {
   id: string
   email: string
@@ -76,27 +70,11 @@ export async function deleteLocalAccount(): Promise<void> {
   pb.authStore.clear()
 }
 
-// 跳应用自己的登录页（/login 路由由写页技能负责创建）。
-// 用 getBasename 拼前缀：AccountMenu 在 Router 外也能安全调用。
+// 账号菜单即使处于 Router 外，仍能进入独立站点的登录页面。
 export function redirectToLocalLogin(): void {
-  const base = getBasename()
-  window.location.assign(`${base === "/" ? "" : base}/login`)
+  window.location.assign('/auth')
 }
-
-// auth.ts 稳定契约的绑定来源：未登录返回 {}，可安全展开进任意 headers。
-// PocketBase SDK 自身请求会自动带 authStore token，这里主要供平台 lib 的
-// 裸 fetch（/api/aigc、/api/llm 等服务端路由按此识别当前用户）。
-//
-// 线上网关(VcAuthFilter)会把 Authorization 头一律当 RH 令牌校验，PB token 走
-// Authorization 会被网关 401 (TOKEN_INVALID) 拒掉。因此经 control 代理的部署
-// 形态一律改走 X-Pb-Auth，由 control 转发 PB 前还原成 Authorization（与
-// scaffold pb.ts 的 beforeSend 同一套约定；此处刻意不 import pb.ts 的新导出，
-// 保证本能力文件单独同步进老 app 也能编译）。本地直连 PB 时保持原样。
+// 非 SDK 裸 fetch 也使用同一标准 Authorization 头。
 export function localAuthHeaders(): Record<string, string> {
-  if (!pb.authStore.isValid || !pb.authStore.token) return {}
-  const host = typeof window === "undefined" ? "" : window.location.hostname
-  const directPb = host === "localhost" || host === "[::1]" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
-  return directPb
-    ? { Authorization: pb.authStore.token }
-    : { "X-Pb-Auth": pb.authStore.token }
+  return pb.authStore.isValid ? authorizationHeaders(pb.authStore.token) : {}
 }

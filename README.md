@@ -1,6 +1,6 @@
-# 随缘网｜前后端项目
+# 随缘网｜独立前后端版本
 
-面向 18 周岁以上用户的真人认识与活动平台。当前采用 **React + TypeScript + Vite / Node.js Neon Gateway / Neon PostgreSQL**，可在原 VibeX Source 模式下开发，也支持独立部署为“网站与 API 同源”的服务。
+面向 18 周岁以上用户的真人认识与活动平台。当前采用 **React + TypeScript + Vite / Node.js Neon Gateway / Neon PostgreSQL**，已按独立同源站点运行，前端与 API 均不依赖 VibeX 服务；历史 VibeX 导出与接口兼容信息另行归档。
 
 **当前阶段：技术链路通过隔离测试，正式公网发布与真人试运营效果仍需单独验收。** 禁止模拟真人喜欢、回复、已读或核验成功。
 
@@ -25,7 +25,7 @@ pnpm install --frozen-lockfile
 pnpm dev:full
 ```
 
-`dev:full` 会读取进程环境中的 `NEON_DSN`，或在本地交互式首次设置后写入已被 Git 忽略的 `dev-secrets.local`。不要将连接串粘贴进聊天、上传到源码库、写入前端变量或提交到 Git。开发环境仅在授权范围内使用真实数据库；开发调试优先隔离 schema。
+`dev:full` 会读取进程环境中的 `NEON_DSN`，或在本地交互式首次设置后写入已被 Git 忽略的 `dev-secrets.local`。不要将连接串粘贴进聊天、上传到源码库、写入前端变量或提交到 Git。开发环境仅在授权范围内使用真实数据库；开发调试优先隔离 schema。 独立版 `pnpm dev:full` 强制 `STAGING_MODE=1`、`NEON_SCHEMA=staging_*`，并校验连接目标必须是 `suiyuan_staging` 数据库及专用角色；不再复用 7000 端口上未知来源的现有网关。请依照 `local-config.example` 配置，本机开发勿使用正式数据库。
 
 ## 工程质量门槛
 
@@ -61,10 +61,10 @@ pnpm staging:smoke                        # 本地 127.0.0.1:8081 只读健康/�
 
 ## Vercel 前端 + 独立 Node 后端（方案 A）
 
-已增加 `vercel.ts`、`render.yaml` 和专门测试：Vercel 承载 React 静态前端，`/__pb/*`、`/api/*` 反向代理到独立 HTTPS Node Gateway；Node 只读取隔离 Neon staging 数据库。Vercel 前端**不配置数据库密码**。
+已增加 `vercel.ts`、`render.yaml` 和专门测试：Vercel 承载 React 静态前端，`/api/*` 反向代理到独立 HTTPS Node Gateway，保留 `/__pb/*` 仅供旧客户端回退；Node 只读取隔离 Neon staging 数据库。Vercel 前端**不配置数据库密码**。
 
 - Vercel Preview 环境变量需显式设置 `SUIYUAN_DEPLOY_MODE=staging`、`SUIYUAN_BACKEND_ORIGIN=https://<真实 Staging 后端>`；缺少配置时部署失败而不是静默连接正式站点。
-- `node scripts/vercel-build.mjs` 为 Vercel 构建根路径资源，原 VibeX 的相对资源路径不变。`pnpm vercel:check` 仅对已构建静态文件和转发配置进行只读自检。
+- `node scripts/vercel-build.mjs` 为 Vercel 构建根路径资源，独立版默认 `/assets`，无需 VibeX 子路径。`pnpm vercel:check` 仅对已构建静态文件和转发配置进行只读自检。
 - `render.yaml` 可选 Render Free 单实例，**仅用于合成测试数据**；其文件系统不持久，已显式禁止免费预览模式上传会员照片。真实受邀用户试点必须换成持久化图片存储并进行访问保护和隐私验收。
 - 本次代码准备**不会自动创建 Vercel 或 Render 公网项目**，需要先连接对应云平台账户、创建独立 Staging 数据库与配置授权。
 
@@ -91,9 +91,9 @@ docker compose -f compose.prod.yml up -d
 
 IP 限流默认仅信任真实 socket 对端。若确有反向代理，才可通过 `TRUSTED_PROXY_IPS` 显式列出**直接代理 IP**；代理必须覆盖 `X-Forwarded-For`，不能拼接用户自带值。多实例水平扩容前仍需集中化限流与共享运行状态。
 
-## VibeX Source 发布（与独立部署分开）
+## 独立版与历史 VibeX 代码隔离
 
-本仓为 VibeX dev-source 导出项目，原 App ID 与平台集成必须保留。修改/回传前阅读 `.vibex/skills/vibex-app-source-roundtrip/SKILL.md`，ZIP 条目路径必须与 Source 编辑器所选目录匹配。**上传前端 Source 并不自动发布本地 Neon 网关**；需另行核对代理目标、后端部署与正式版本。
+本分支 `refactor/standalone-suiyuan` 不再调用 VibeX 编辑插件、子路径路由、平台认证或线上资源。原始平台工作流保留在此前的 Git 分支，未在此分支删除用户电脑上未追踪的 VibeX 导出工具。旧 `/__pb/api/*` 和 `X-Pb-Auth` 仅在服务端作为兼容入口；新客户端统一使用 `/api/*` 与 `Authorization`。旧 PocketBase → Neon 迁移脚本存档于 `scripts/legacy/`，默认不得用于日常部署。**这是代码独立化，不代表国内免 VPN 公网访问已自动解决。** 详见 `docs/23-随缘网独立版重构与验收.md`。
 
 ## 数据与隐私约束
 
@@ -103,4 +103,4 @@ IP 限流默认仅信任真实 socket 对端。若确有反向代理，才可通
 - `public` 迁移、数据清除/恢复、发布覆盖均须先备份并独立验收；日常测试只使用临时隔离 schema。
 - 每次发布前均应检查 Git 工作区、代码保密规则与部署版本；禁止未经审查执行 `git add .`、整库强制覆盖或删除正式回归测试。
 
-**继续阅读：** `docs/22-Vercel前端与独立Node预发布部署.md`、`docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`、`docs/18-完整前后端发布候选与运维交接.md`、`docs/12-发布与回退手册.md`。
+**继续阅读：** `docs/23-随缘网独立版重构与验收.md`、`docs/22-Vercel前端与独立Node预发布部署.md`、`docs/20-预发布部署与手机验收.md`、`docs/21-杭州真人试运营执行方案.md`、`docs/18-完整前后端发布候选与运维交接.md`、`docs/12-发布与回退手册.md`。

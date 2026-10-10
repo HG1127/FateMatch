@@ -1,10 +1,10 @@
-// Vercel frontend build only. Preserve relative base for VibeX development/source exports.
+// Vercel frontend build. The standalone site uses root-absolute /assets paths.
 import { spawnSync } from 'node:child_process'
 import process from 'node:process'
 
 for (const args of [['node_modules/typescript/bin/tsc', '-b'], ['node_modules/vite/bin/vite.js', 'build']]) {
   const out = spawnSync(process.execPath, args, {
-    cwd: process.cwd(), env: { ...process.env, SUIYUAN_VERCEL_FRONTEND: '1' },
+    cwd: process.cwd(), env: { ...process.env },
     stdio: 'inherit', windowsHide: true,
   })
   if (out.error) { console.error('[vercel-build] command could not launch:', out.error.code); process.exit(1) }

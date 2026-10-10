@@ -22,7 +22,7 @@ async function loadCol(col: string, enabled = true): Promise<Row[]> {
   for (;;) {
     const res = await pb.collection(col).getList(page, 200)
     if (!Array.isArray(res.items) || !Number.isSafeInteger(res.totalPages) || res.totalPages < 0 || res.page !== page) {
-      throw new Error('数据库接口返回异常，请检查后端服务和 /__pb 代理配置')
+      throw new Error('数据库接口返回异常，请检查自建后端 /api 服务与网络连接')
     }
     items.push(...(res.items as unknown as Row[]))
     if (page >= res.totalPages) break

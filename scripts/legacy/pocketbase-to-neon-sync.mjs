@@ -1,17 +1,20 @@
-// Neon 数据镜像：把应用数据服务里的全量数据同步到自建 Neon（Postgres），
+// 归档：旧 PocketBase → Neon 的全量镜像同步工具，独立版禁止执行写入。
 // 每张集合对应一张 Postgres 表，可查询、可导出，作为异地镜像与迁移数据源。
 // 线上数据服务保持不动，本脚本只读本地 + 写 Neon，失败重试即可。
 //
 // 用法（容器内）：
 //   NEON_DSN='postgresql://user:pass@ep-xxx-pooler.neon.tech/neondb?sslmode=require' \
 //   PB_ADMIN=<管理邮箱> PB_PASS=<管理密码> \
-//   node scripts/neon-sync.mjs [--dry]
+//   node scripts/legacy/pocketbase-to-neon-sync.mjs --dry
 //
 // --dry 只读本地数据并打印各表行数与推断出的列结构，不连 Neon。密钥只走环境变量，不落盘不进前端。
 import pg from 'pg'
 
 const PB = process.env.PB_URL ?? 'http://127.0.0.1:7000'
 const DRY = process.argv.includes('--dry')
+// 历史同步会覆盖与删除数据库行；独立版永远只允许 dry-run。
+// 如确需恢复原迁移流程，必须从历史 Git 分支单独检出，在备份与审批后审查执行。
+if (!DRY) throw new Error('历史 PocketBase 同步写入已在独立版中禁用；仅允许 --dry')
 
 const STRIP_FIELDS = ['tokenKey', 'collectionId', 'collectionName', 'collection_id', 'collection_name'] // 会话签名与系统归属字段不进镜像
 

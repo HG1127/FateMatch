@@ -205,7 +205,8 @@ function serveStore(data?: {
       }))
       return Response.json({ page: 1, perPage: Math.max(1, items.length), totalPages: items.length ? 1 : 0, totalItems: items.length, items })
     }
-    const collection = url.pathname.split('/')[4]
+    // 标准同源路径：/api/collections/{name}/records
+    const collection = url.pathname.split('/')[3]
     if (method !== 'GET') {
       writes.push(`${method} ${url.pathname}`)
       if (failWriteStatus) return Response.json({ message: 'Write failed', data: {} }, { status: failWriteStatus })
@@ -316,7 +317,7 @@ describe('初始化完成前禁止自动保存', () => {
     expect(result.current.me?.id).toBe('member-new')
     expect(result.current.me?.gender).toBe('unknown')
     const created = api.writes.filter(x => x.startsWith('POST '))
-    expect(created).toEqual(['POST /__pb/api/collections/profiles/records'])
+    expect(created).toEqual(['POST /api/collections/profiles/records'])
     expect(api.writes.some(x => /\/(posts|events|digests|site_settings)\/records/.test(x))).toBe(false)
   })
 
@@ -332,7 +333,7 @@ describe('初始化完成前禁止自动保存', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     expect(api.writes).toEqual([])
     await act(async () => { await result.current.saveProfile({ nickname: '远端会员已更新' }) })
-    expect(api.writes).toContain('PATCH /__pb/api/collections/profiles/records/p1')
+    expect(api.writes).toContain('PATCH /api/collections/profiles/records/p1')
     expect(result.current.me?.nickname).toBe('远端会员已更新')
   })
 
@@ -657,7 +658,7 @@ describe('确认式内容与活动写入', () => {
     })
 
     expect(result.current.me?.photos).toEqual(['/new-1.jpg', '/old.jpg', '/new-2.jpg'])
-    expect(api.writes.filter(x => x === 'PATCH /__pb/api/collections/profiles/records/p1')).toHaveLength(1)
+    expect(api.writes.filter(x => x === 'PATCH /api/collections/profiles/records/p1')).toHaveLength(1)
   })
 
   it('消息撤回写入失败时不提前标记为已撤回', async () => {

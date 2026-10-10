@@ -12,6 +12,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { assertIsolatedLocalDev } from './staging-local-target.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -134,6 +135,7 @@ async function ensureLocalDsn() {
     if (!/^postgres(?:ql)?:\/\//i.test(dsn)) {
       throw new Error('连接串格式不正确，应以 postgresql:// 或 postgres:// 开头')
     }
+    assertIsolatedLocalDev({ ...process.env, NEON_DSN: dsn })
     fs.writeFileSync(path.join(ROOT, 'dev-secrets.local'), `NEON_DSN=${dsn}\n`, { encoding: 'utf8', mode: 0o600 })
     process.env.NEON_DSN = dsn
     console.log('[dev:full] 已保存到 dev-secrets.local；以后启动无需再次输入。')
@@ -172,8 +174,8 @@ function canListen(port) {
     const s = net.createServer()
     s.unref()
     s.on('error', () => resolve(false))
-    // 与 Vite 的 host=0.0.0.0 保持一致，避免 Windows 上 127.0.0.1 探测误判。
-    s.listen(port, '0.0.0.0', () => s.close(() => resolve(true)))
+    // 独立版只允许本机 loopback 开发，不向局域网广播。
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
   })
 }
 
@@ -201,6 +203,7 @@ function stopChild(child) {
 loadLocalEnv()
 try {
   await ensureLocalDsn()
+  assertIsolatedLocalDev(process.env)
 } catch (e) {
   console.error(`\n[dev:full] ${e instanceof Error ? e.message : String(e)}`)
   console.error('[dev:full] 注意：不要把连接串发到聊天、提交到 Git 或写进前端代码。\n')
@@ -225,14 +228,14 @@ process.on('SIGTERM', () => void shutdown(0))
 
 try {
   if (await healthOk()) {
-    console.log(`[dev:full] 复用已运行的数据网关：${GATEWAY_URL}`)
+    throw new Error('端口上已有网关但无法证明属于隔离 Staging 库。请先停止旧网关，避免复用生产连接。')
   } else {
     console.log('[dev:full] 正在启动 Neon 数据网关…')
     gatewayOwned = true
     // 本地开发后端也启用 watch：修改 gateway 后自动重启，避免前端热更新而后端仍运行旧契约。
     gateway = spawn(process.execPath, ['--watch', 'server/neon-gateway.mjs'], {
       cwd: ROOT,
-      env: { ...process.env, PORT: String(GATEWAY_PORT) },
+      env: { ...process.env, HOST: '127.0.0.1', PORT: String(GATEWAY_PORT) },
       stdio: 'inherit',
       windowsHide: false,
     })
@@ -243,7 +246,7 @@ try {
   const vitePort = await chooseVitePort()
   const viteBin = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')
   // 不传 --strictPort：即使端口在探测后被其他进程抢占，Vite 仍会自动顺延。
-  const args = [viteBin, '--host', '0.0.0.0', '--port', String(vitePort)]
+  const args = [viteBin, '--host', '127.0.0.1', '--port', String(vitePort)]
   if (process.env.NO_OPEN !== '1') args.push('--open')
 
   console.log(`[dev:full] 正在启动前端，首选端口 ${vitePort}；如被占用将自动顺延…`)

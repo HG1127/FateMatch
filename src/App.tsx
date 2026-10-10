@@ -6,7 +6,6 @@ import { StoreProvider } from '@/lib/store'
 import { useStore } from '@/lib/store-context'
 import type { FeatureKey } from '@/lib/store'
 import { portrait } from '@/lib/art'
-import { getBasename } from '@/lib/pb'
 import { reportErr } from '@/lib/utils'
 import { Layout } from '@/components/Layout'
 
@@ -121,7 +120,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { msg: string }> 
           <p className="mt-3 max-w-lg text-sm leading-7 text-muted-foreground">当前页面暂时无法显示。请尝试重新加载；如问题持续出现，可联系平台工作人员。</p>
           <div className="mt-5 flex flex-wrap justify-center gap-3">
             <button className="btn-primary" onClick={() => window.location.reload()}>重新加载</button>
-            <button className="btn-outline" onClick={() => { window.location.href = getBasename() }}>返回首页</button>
+            <button className="btn-outline" onClick={() => { window.location.href = '/' }}>返回首页</button>
           </div>
         </div>
       )
@@ -134,7 +133,7 @@ export default function App() {
   return (
     <StoreProvider>
       <ErrorBoundary>
-        <BrowserRouter basename={getBasename()}>
+        <BrowserRouter>
           <ScrollToTop />
           <ImgGuard />
           <Toaster position="top-center" richColors toastOptions={{ style: { fontFamily: 'inherit' } }} />

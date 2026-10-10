@@ -1,4 +1,4 @@
-// Playwright 发布冒烟专用页面服务：固定 7300，并把 /__pb 代理到隔离网关 7200。
+// Playwright 发布冒烟专用页面服务：固定 7300，并把 /api 代理到隔离网关 7200。
 // 由 Playwright webServer 生命周期管理，不读取/写入数据库密钥。
 import process from 'node:process'
 import { createServer } from 'vite'

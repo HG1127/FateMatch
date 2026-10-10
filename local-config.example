@@ -1,6 +1,8 @@
-# 复制为 dev-secrets.local 后填写真实连接串。
-# dev-secrets.local 匹配 *.local，已被 .gitignore 排除。
-NEON_DSN=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+# 独立版示例：只能连接 suiyuan-staging 的专用 Neon 数据库。
+# 复制为 dev-secrets.local 后，在你自己的电脑上填写真实连接串；严禁提交 Git。
+NEON_DSN=postgresql://suiyuan_staging_owner:YOUR_PASSWORD@YOUR_STAGING_HOST.neon.tech/suiyuan_staging?sslmode=require
+NEON_SCHEMA=staging_render_preview
+STAGING_MODE=1
 
-# 可选：前端首选端口。被占用时 dev:full 会继续尝试后续 10 个端口。
+# 可选：前端首选端口，必须使用 loopback。
 VITE_PORT=8000

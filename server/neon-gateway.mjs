@@ -634,6 +634,7 @@ function castParam(colType, v) {
 
 /** 当前请求的登录态：{ id, role } 或 null（停用即拒 v1.6；改密后旧令牌失效、注销账号令牌作废 v1.8） */
 async function resolveAuth(req) {
+  // 首选标准 Authorization；兼容旧版 X-Pb-Auth，待客户端迁移验收后另行废弃。
   const raw = req.headers['authorization'] || req.headers['x-pb-auth'] || ''
   const token = String(raw).replace(/^Bearer\s+/i, '').trim()
   if (!token) return null
@@ -1535,6 +1536,7 @@ const server = http.createServer(async (req, res) => {
   }
   const t0 = Date.now()
   const url = new URL(req.url, 'http://localhost')
+  // 旧版 /__pb/api 路径只作为升级过渡兼容；独立前端直接请求 /api。
   const path = SERVE_STATIC && (url.pathname === '/__pb/api' || url.pathname.startsWith('/__pb/api/'))
     ? url.pathname.slice('/__pb'.length) : url.pathname
   try {

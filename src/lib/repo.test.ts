@@ -323,7 +323,8 @@ function serveRoleCollections(role: 'guest' | 'member' | 'admin', failure?: { co
   const publicCollections = ['site_settings']
   vi.stubGlobal('fetch', async (input: string | URL | Request) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost')
-    const collection = url.pathname.split('/')[4]
+    // 新同源标准路径：/api/collections/{collection}/records
+    const collection = url.pathname.split('/')[3]
     if (url.pathname.endsWith('/api/chats/summaries')) {
       requests.push('chat_summaries')
       if (failure?.collection === 'chat_summaries') return Response.json({ message: 'Read failed', data: {} }, { status: failure.status })

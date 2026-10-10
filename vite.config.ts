@@ -1,101 +1,16 @@
-// Bake 的 vite.config.ts (0.0.7+ runtime). 已经 inline 了 rh-visual-edit 的
-// rhSourcePlugin —— 模型不需要再调 rh-visual-edit skill 装它.
-//
-// ⚠️ 整体 Write 覆盖本文件是禁忌. 改时用 Read + Edit 局部改:
-//   - 加 alias / 改 server 配置: 修对应字段
-//   - 加别的 plugin: 在 plugins 数组里追加, 但 rhSourcePlugin() 必须在第 0 位 (enforce: 'pre' 保证它在 react/oxc 之前跑)
-//   - 不要删 rhSourcePlugin 那段函数定义, 也不要删 @babel/parser / @babel/traverse / magic-string 这三个 import
+// 随缘网独立版：Vite 只提供开发服务器和本机 API 代理。
+// 生产站点由 Node 网关提供 /api 与 React 静态文件。
 import path from 'node:path'
-import fs from 'node:fs'
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
-import { parse as babelParse } from '@babel/parser'
-import _traverse from '@babel/traverse'
-import MagicString from 'magic-string'
 
-// @babel/traverse 在不同 bundler 下 ESM/CJS interop 形态不一致, 兜底取 default.
-const traverse = ((_traverse as any).default ?? _traverse) as typeof _traverse
-
-// rh-visual-edit: 独立 Vite plugin, 给每个 JSX 元素加 data-rh-src="<rel>:<line>:<col>".
-// 不依赖 @vitejs/plugin-react 的 babel hook (plugin-react v6+ 已切到 oxc, 不再接受 babel 选项).
-function rhSourcePlugin() {
-  return {
-    name: 'rh-source',
-    enforce: 'pre' as const,
-    apply: 'serve' as const,
-    transform(code: string, id: string) {
-      const cleanId = id.split('?')[0]
-      if (!/\.(jsx|tsx)$/.test(cleanId)) return null
-      if (cleanId.includes('/node_modules/')) return null
-      let ast: any
-      try {
-        ast = babelParse(code, {
-          sourceType: 'module',
-          allowReturnOutsideFunction: true,
-          plugins: ['jsx', 'typescript'],
-        })
-      } catch {
-        return null
-      }
-      const cwd = process.cwd()
-      const rel = cleanId.startsWith(cwd + '/') ? cleanId.slice(cwd.length + 1) : cleanId
-      const filename = rel.replace(/\\/g, '/')
-      const ms = new MagicString(code)
-      traverse(ast, {
-        JSXOpeningElement(p: any) {
-          const node = p.node
-          const loc = node.loc
-          if (!loc) return
-          const exists = node.attributes.some(
-            (a: any) => a.type === 'JSXAttribute' && a.name && a.name.name === 'data-rh-src',
-          )
-          if (exists) return
-          const nameNode = node.name
-          if (!nameNode || nameNode.end == null) return
-          // TSX 里 <Foo<T> /> 合法; 必须插在 typeArguments 之后, 否则会变成
-          // <Foo data-rh-src="..."<T> /> 导致 oxc/babel 解析失败.
-          const insertEnd =
-            (node.typeArguments && node.typeArguments.end) ??
-            (node.typeParameters && node.typeParameters.end) ??
-            nameNode.end
-          ms.appendRight(
-            insertEnd,
-            ` data-rh-src="${filename}:${loc.start.line}:${loc.start.column}"`,
-          )
-        },
-      })
-      if (!ms.hasChanged()) return null
-      return {
-        code: ms.toString(),
-        map: ms.generateMap({ hires: true, source: id }),
-      }
-    },
-  }
-}
-
-// 预览页白屏排查: 前端把运行时错误打到 /__err, 落到 logs/client-errors.log
-function errLogPlugin() {
-  return {
-    name: 'err-log',
-    configureServer(server: any) {
-      server.middlewares.use('/__err', (req: any, res: any) => {
-        try {
-          const m = decodeURIComponent((req.url || '').replace(/^\?m=/, '').replace(/^\//, ''))
-          fs.appendFileSync(path.resolve(__dirname, 'logs/client-errors.log'), `${new Date().toISOString()} ${m}\n`)
-        } catch {
-          /* ignore */
-        }
-        res.setHeader('Access-Control-Allow-Origin', '*')
-        res.end('ok')
-      })
-    },
-  }
-}
-
+const localGateway = process.env.LOCAL_GATEWAY_URL ?? 'http://127.0.0.1:7000'
 const localFullstackProxy = process.env.LOCAL_FULLSTACK === '1'
   ? {
+      '/api': { target: localGateway, changeOrigin: true },
+      // 迁移期兼容旧页面；新前端直接访问 /api。
       '/__pb': {
-        target: process.env.LOCAL_GATEWAY_URL ?? 'http://127.0.0.1:7000',
+        target: localGateway,
         changeOrigin: true,
         rewrite: (p: string) => p.replace(/^\/__pb/, ''),
       },
@@ -103,32 +18,24 @@ const localFullstackProxy = process.env.LOCAL_FULLSTACK === '1'
   : undefined
 
 export default defineConfig({
-  // VibeX dev-source keeps relative assets under its subpath. Vercel SPA deep links need /assets/ URLs.
-  base: process.env.SUIYUAN_VERCEL_FRONTEND === '1' ? '/' : './',
-  plugins: [rhSourcePlugin(), errLogPlugin(), react()],
+  base: '/',
+  plugins: [react()],
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: { '@': path.resolve(__dirname, './src') },
   },
   server: {
-    allowedHosts: ['.runninghub.cn', '.vibex.cn'],
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     port: 8000,
-    // VibeX 原始模式仍严格使用 8000；本地全栈模式允许自动顺延端口。
     strictPort: !localFullstackProxy,
     ...(localFullstackProxy ? { proxy: localFullstackProxy } : {}),
   },
   preview: {
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     port: 8000,
     ...(localFullstackProxy ? { proxy: localFullstackProxy } : {}),
   },
-  // vitest: e2e/ 是 Playwright 发布冒烟的地盘(由 pnpm e2e 单独跑), 单测只扫 src
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
-    // 当前测试包含多个 jsdom/React 文件；复用 worker 环境可避免每个文件单独启动重型隔离进程，
-    // 在本地 Runner/CI 上显著降低启动争用。各测试文件负责 cleanup / unstub，保持状态边界。
     pool: 'threads',
     fileParallelism: false,
     isolate: false,

@@ -1,20 +1,28 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { PB_USER_AUTH_HEADER, pbAuthHeaderForHost } from './pb-auth'
+import { authorizationHeaders } from './pb-auth'
+import { getPocketBaseUrl, pb, pbAuthHeader } from './pb'
 
-describe('PocketBase 鉴权头路由', () => {
-  it('本地直连 host 使用 Authorization', () => {
-    expect(pbAuthHeaderForHost('token-1', 'localhost')).toEqual({ Authorization: 'token-1' })
-    expect(pbAuthHeaderForHost('token-2', '127.0.0.1')).toEqual({ Authorization: 'token-2' })
-    expect(pbAuthHeaderForHost('token-3', '[::1]')).toEqual({ Authorization: 'token-3' })
+describe('独立版同源 API 与鉴权', () => {
+  it('以当前站点 origin 访问 /api，不再生成子路径或 /__pb', () => {
+    expect(getPocketBaseUrl()).toBe(window.location.origin)
+    expect(pb.buildURL('/api/collections/users/records'))
+      .toBe(`${window.location.origin}/api/collections/users/records`)
+    expect(pb.baseURL).not.toContain('__pb')
   })
 
-  it('部署域使用 X-Pb-Auth，避免平台网关误判 PB token', () => {
-    expect(pbAuthHeaderForHost('token-1', 'demo.apps.vibex.cn')).toEqual({ [PB_USER_AUTH_HEADER]: 'token-1' })
-    expect(pbAuthHeaderForHost('token-2', 'example.com')).toEqual({ [PB_USER_AUTH_HEADER]: 'token-2' })
+  it('统一使用 Authorization，不依赖平台私有 X-Pb-Auth', () => {
+    expect(authorizationHeaders('token-1')).toEqual({ Authorization: 'token-1' })
+    expect(pbAuthHeader('token-2')).toEqual({ Authorization: 'token-2' })
+    expect(JSON.stringify(authorizationHeaders('abc'))).not.toContain('X-Pb-Auth')
   })
 
-  it('无 token 时不附加鉴权头', () => {
-    expect(pbAuthHeaderForHost('', 'localhost')).toEqual({})
-    expect(pbAuthHeaderForHost(null, 'example.com')).toEqual({})
+  it('无 token 时不会附加认证头', () => {
+    expect(authorizationHeaders('')).toEqual({})
+    expect(authorizationHeaders(null)).toEqual({})
+  })
+
+  it('沿用原独立版认证存储，不依赖 VibeX App ID', () => {
+    expect(pb.authStore).toBeDefined()
   })
 })
