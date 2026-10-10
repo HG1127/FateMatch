@@ -1,14 +1,19 @@
 import { useRef, useState } from 'react'
-import { CalendarPlus, ImagePlus, Images, Wand2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarPlus, ImagePlus, Images, Wand2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStore } from '@/lib/store-context'
 import type { EventItem } from '@/lib/store'
 import { Modal, Tag } from '@/components/ui'
 import { CityPicker } from '@/components/ui/CityPicker'
+import { DateFields } from '@/components/ui/DateFields'
 import { FESTS, FEST_TEMPLATE } from '@/lib/festivals'
 import { cn } from '@/lib/utils'
 import { readImageFile } from '@/lib/image-utils'
 import { INTERESTS } from '@/lib/store-model'
+
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
 
 interface Props {
   open: boolean
@@ -112,7 +117,7 @@ export function EventForm({ open, initial, onClose }: Props) {
     if (!title.trim()) return toast.error('给活动起个名字吧')
     if (!city) return toast.error('选一座城市')
     if (!date || !time) return toast.error('填好日期与时间')
-    if (date < new Date().toISOString().slice(0, 10)) return toast.error('活动日期不能早于今天')
+    if (date < localDateKey(new Date())) return toast.error('活动日期不能早于今天')
     if (!initial && !venue.trim()) return toast.error('请填写大致集合区域，避免参与者报名后无处可去')
     if (!initial && !costNote.trim()) return toast.error('请说明是否收费，免费活动请填写“免费”')
     if (!Number.isInteger(Number(capacity)) || Number(capacity) < 2 || Number(capacity) > 99) return toast.error('人数上限请输入 2–99 的整数')
@@ -152,7 +157,7 @@ export function EventForm({ open, initial, onClose }: Props) {
 
   return (
     <Modal open={open} onClose={() => !submitting && onClose()} wide>
-      <div className="space-y-4 p-5 md:p-6">
+      <div className="space-y-4 px-4 pb-6 pt-12 sm:p-5 md:p-6">
         <h3 className="flex items-center gap-2 font-xing text-2xl text-foreground">
           <CalendarPlus size={18} className="text-gold" />
           {initial ? '编辑活动' : '发起一场活动'}
@@ -176,8 +181,29 @@ export function EventForm({ open, initial, onClose }: Props) {
             <input className="input-cn" type="number" min={2} max={99} value={capacity} onChange={e => setCapacity(e.target.value)} />
           </div>
           <div>
-            <label className="mb-1 block text-xs tracking-widest text-muted-foreground">日期</label>
-            <input className="input-cn" type="date" min={new Date().toISOString().slice(0, 10)} value={date} onChange={e => setDate(e.target.value)} />
+            <p className="mb-1 block text-xs tracking-widest text-muted-foreground">日期</p>
+            <DateFields label="活动日期" value={date} onChange={setDate} min={localDateKey(new Date())} />
+            <div className="mt-2 flex flex-wrap gap-2" aria-label="快捷选择活动日期">
+              {[
+                { label: '今天', offset: 0 },
+                { label: '明天', offset: 1 },
+                { label: '本周六', offset: (6 - new Date().getDay() + 7) % 7 },
+              ].map(item => {
+                const now = new Date()
+                const value = localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + item.offset))
+                return (
+                  <button
+                    key={item.label}
+                    type="button"
+                    aria-pressed={date === value}
+                    className={cn('min-h-10 rounded-full border px-3 text-xs transition', date === value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-foreground hover:border-primary')}
+                    onClick={() => setDate(value)}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
           </div>
           <div>
             <label className="mb-1 block text-xs tracking-widest text-muted-foreground">时间</label>
@@ -241,50 +267,59 @@ export function EventForm({ open, initial, onClose }: Props) {
         <div>
           <label className="mb-1.5 flex items-center gap-1 text-xs tracking-widest text-muted-foreground">
             <Images size={12} />
-            活动相册(最多 4 张,拖动可调顺序)
+            活动相册（最多 4 张；电脑拖拽、手机点箭头排序）
           </label>
           <div className="flex flex-wrap gap-2">
             {images.map((img, i) => (
-              <div
-                key={img}
-                onDragOver={e => { e.preventDefault(); setOverIdx(i) }}
-                onDragLeave={() => setOverIdx(o => (o === i ? null : o))}
-                onDrop={e => { e.preventDefault(); if (dragIdx !== null) moveImage(dragIdx, i); setDragIdx(null); setOverIdx(null) }}
-                className={cn(
-                  'relative h-20 w-28 overflow-hidden rounded-md border transition',
-                  overIdx === i && dragIdx !== null ? 'border-primary ring-2 ring-primary/40' : 'border-border',
-                  dragIdx === i && 'opacity-40',
-                )}
-              >
-                <img
-                  src={img}
-                  alt=""
-                  draggable
-                  onDragStart={() => setDragIdx(i)}
-                  onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
-                  className="h-full w-full cursor-grab object-cover active:cursor-grabbing"
-                />
-                <button
-                  title="移除这张"
-                  className="absolute right-1 top-1 rounded-full bg-card/90 p-0.5 text-muted-foreground transition hover:text-primary"
-                  onClick={() => setImages(p => p.filter((_, idx) => idx !== i))}
-                >
-                  <X size={12} />
-                </button>
-                <button
-                  title="用这张作为活动封面"
+              <div key={img} className="w-[calc(50%-0.25rem)] sm:w-28">
+                <div
+                  onDragOver={e => { e.preventDefault(); setOverIdx(i) }}
+                  onDragLeave={() => setOverIdx(o => (o === i ? null : o))}
+                  onDrop={e => { e.preventDefault(); if (dragIdx !== null) moveImage(dragIdx, i); setDragIdx(null); setOverIdx(null) }}
                   className={cn(
-                    'absolute bottom-1 right-1 rounded-full px-1.5 py-0.5 text-[10px] transition',
-                    cover === img ? 'bg-gold/90 text-accent-foreground' : 'bg-card/90 text-muted-foreground hover:text-primary',
+                    'relative h-28 overflow-hidden rounded-md border transition sm:h-20',
+                    overIdx === i && dragIdx !== null ? 'border-primary ring-2 ring-primary/40' : 'border-border',
+                    dragIdx === i && 'opacity-40',
                   )}
-                  onClick={() => { setCover(img); toast.success(cover === img ? '这张已是封面' : '相册图已设为封面') }}
                 >
-                  {cover === img ? '封面' : '设封面'}
-                </button>
+                  <img
+                    src={img}
+                    alt={`活动相册第 ${i + 1} 张`}
+                    draggable
+                    onDragStart={() => setDragIdx(i)}
+                    onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+                    className="h-full w-full cursor-grab object-cover active:cursor-grabbing"
+                  />
+                  <button
+                    type="button"
+                    aria-label={`移除第 ${i + 1} 张活动照片`}
+                    className="absolute right-1 top-1 flex h-10 w-10 items-center justify-center rounded-full bg-card/95 text-foreground shadow-sm transition hover:text-primary sm:h-7 sm:w-7"
+                    onClick={() => setImages(p => p.filter((_, idx) => idx !== i))}
+                  >
+                    <X size={17} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`将第 ${i + 1} 张设为活动封面`}
+                    className={cn(
+                      'absolute bottom-1 right-1 min-h-10 rounded-full px-3 text-xs font-semibold transition sm:min-h-7 sm:px-2',
+                      cover === img ? 'bg-gold/95 text-accent-foreground' : 'bg-card/95 text-foreground hover:text-primary',
+                    )}
+                    onClick={() => { setCover(img); toast.success(cover === img ? '这张已是封面' : '相册图已设为封面') }}
+                  >
+                    {cover === img ? '封面' : '设封面'}
+                  </button>
+                </div>
+                <div className="mt-1 flex gap-1 sm:hidden">
+                  <button type="button" aria-label={`将第 ${i + 1} 张活动照片前移`} disabled={i === 0} onClick={() => moveImage(i, i - 1)}
+                    className="flex h-11 flex-1 items-center justify-center rounded-md border border-border bg-card text-primary disabled:opacity-35"><ArrowLeft size={19} /></button>
+                  <button type="button" aria-label={`将第 ${i + 1} 张活动照片后移`} disabled={i === images.length - 1} onClick={() => moveImage(i, i + 1)}
+                    className="flex h-11 flex-1 items-center justify-center rounded-md border border-border bg-card text-primary disabled:opacity-35"><ArrowRight size={19} /></button>
+                </div>
               </div>
             ))}
             {images.length < 4 && (
-              <label className="flex h-20 w-28 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground transition hover:border-primary/50 hover:text-primary">
+              <label className="flex h-28 min-h-11 w-[calc(50%-0.25rem)] cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground transition hover:border-primary/50 hover:text-primary sm:h-20 sm:w-28">
                 <ImagePlus size={16} />
                 <span className="text-[10px]">添加图片</span>
                 <input type="file" accept="image/*" multiple className="hidden" onChange={e => { void pickAlbum(e.target.files); e.target.value = '' }} />

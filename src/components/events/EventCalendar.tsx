@@ -35,33 +35,38 @@ export function EventCalendar({ events, onOpen, onRangeChange }: { events: Event
     byDate.set(e.date, [...(byDate.get(e.date) ?? []), e])
   })
 
-  const shiftMonth = (delta: number) => {
-    setCursor(new Date(y, m + delta, 1))
+  const jumpTo = (year: number, month: number) => {
+    setCursor(new Date(year, month, 1))
     setPicked('')
   }
+  const shiftMonth = (delta: number) => jumpTo(y, m + delta)
+  const firstYear = Math.min(y, today.getFullYear() - 30)
+  const years = Array.from({ length: Math.max(61, y - firstYear + 1) }, (_, i) => firstYear + i)
 
   const dayEvents = picked ? byDate.get(picked) ?? [] : []
 
   return (
     <div className="space-y-5">
-      <div className="card-cn rounded-lg p-4 md:p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <button className="btn-ghost !px-2.5 !py-1.5" onClick={() => shiftMonth(-1)} aria-label="上一月">
-            <ChevronLeft size={16} />
+      <div className="card-cn rounded-lg p-3 sm:p-4 md:p-5">
+        <div className="mb-2 flex items-center justify-between gap-1">
+          <button type="button" className="btn-ghost min-h-11 min-w-11 !px-1" onClick={() => shiftMonth(-1)} aria-label="上一月">
+            <ChevronLeft size={20} />
           </button>
-          <div className="flex items-center gap-3">
-            <p className="font-xing text-2xl text-foreground">
-              <span className="cjk-latin">{y}</span> 年 <span className="cjk-latin">{m + 1}</span> 月
-            </p>
-            <button
-              className="rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground transition hover:border-primary/50 hover:text-primary"
-              onClick={() => { setCursor(new Date(today.getFullYear(), today.getMonth(), 1)); setPicked('') }}
-            >
-              回本月
-            </button>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <select aria-label="日历年份" className="input-cn !w-[90px] min-w-0 !px-1.5 text-center tabular-nums" value={y} onChange={e => jumpTo(Number(e.target.value), m)}>
+              {years.map(year => <option key={year} value={year}>{year} 年</option>)}
+            </select>
+            <select aria-label="日历月份" className="input-cn !w-[73px] min-w-0 !px-1.5 text-center tabular-nums" value={m} onChange={e => jumpTo(y, Number(e.target.value))}>
+              {Array.from({ length: 12 }, (_, i) => <option key={i} value={i}>{i + 1} 月</option>)}
+            </select>
           </div>
-          <button className="btn-ghost !px-2.5 !py-1.5" onClick={() => shiftMonth(1)} aria-label="下一月">
-            <ChevronRight size={16} />
+          <button type="button" className="btn-ghost min-h-11 min-w-11 !px-1" onClick={() => shiftMonth(1)} aria-label="下一月">
+            <ChevronRight size={20} />
+          </button>
+        </div>
+        <div className="mb-3 flex justify-center">
+          <button type="button" className="min-h-10 rounded-full border border-border bg-card px-4 text-xs text-primary transition hover:border-primary" onClick={() => jumpTo(today.getFullYear(), today.getMonth())}>
+            回到本月
           </button>
         </div>
         {monthFests.length > 0 && (
@@ -92,9 +97,12 @@ export function EventCalendar({ events, onOpen, onRangeChange }: { events: Event
             return (
               <button
                 key={key}
+                type="button"
+                aria-label={`${y}年${m + 1}月${d}日，${list.length}场活动${FESTS[key] ? `，${FESTS[key]}` : ''}`}
+                aria-pressed={picked === key}
                 onClick={() => setPicked(p => (p === key ? '' : key))}
                 className={cn(
-                  'relative flex aspect-square flex-col items-center justify-center rounded-md border text-sm transition',
+                  'relative flex min-h-11 flex-col items-center justify-center rounded-md border text-sm transition',
                   picked === key ? 'border-primary bg-primary text-primary-foreground' : 'border-transparent hover:bg-muted',
                   key === todayKey && picked !== key && 'border-gold/60 text-primary',
                   list.length === 0 && picked !== key && 'text-foreground/40',
@@ -115,7 +123,12 @@ export function EventCalendar({ events, onOpen, onRangeChange }: { events: Event
             )
           })}
         </div>
-        <p className="mt-3 flex items-center justify-center gap-4 text-[11px] text-muted-foreground">
+        {picked && (
+          <p role="status" className="mt-3 rounded-md bg-primary/5 px-3 py-2 text-center text-sm font-semibold text-primary">
+            {Number(picked.slice(5, 7))} 月 {Number(picked.slice(8, 10))} 日：{(byDate.get(picked) ?? []).length} 场活动
+          </p>
+        )}
+        <p className="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-primary" />有活动</span>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-gold" />已报名</span>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rotate-45 bg-gold" />传统佳节</span>

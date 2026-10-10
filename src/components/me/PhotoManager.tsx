@@ -52,7 +52,7 @@ export function PhotoManager() {
           }
         }}
       />
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {me.photos.map((p, i) => (
           <div
             key={p}
@@ -87,7 +87,7 @@ export function PhotoManager() {
               }}
               onDragEnd={finishDrag}
             />
-            <span className="pointer-events-none absolute left-1.5 bottom-1.5 inline-flex items-center gap-0.5 rounded-sm bg-red-ink/60 px-1 py-0.5 text-[10px] text-primary-foreground/80 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
+            <span className="pointer-events-none absolute left-1.5 bottom-1.5 hidden items-center gap-0.5 rounded-sm bg-red-ink/60 px-1 py-0.5 text-[10px] text-primary-foreground/80 transition md:inline-flex md:opacity-0 md:group-hover:opacity-100">
               <GripVertical size={10} />
               拖拽排序
             </span>
@@ -100,7 +100,7 @@ export function PhotoManager() {
               <button
                 aria-label="设为头像"
                 title="设为头像"
-                className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-sm bg-red-ink/70 px-1.5 py-0.5 text-[10px] text-primary-foreground opacity-100 transition hover:bg-red-ink md:opacity-0 md:group-hover:opacity-100"
+                className="absolute left-1.5 top-1.5 inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md bg-red-ink/80 px-2 text-xs text-primary-foreground transition hover:bg-red-ink md:min-h-0 md:min-w-0 md:py-1 md:opacity-0 md:group-hover:opacity-100"
                 disabled={saving}
                 onClick={() => {
                   if (saving) return
@@ -111,18 +111,18 @@ export function PhotoManager() {
                     .finally(() => setSaving(false))
                 }}
               >
-                <Star size={10} />
-                设为头像
+                <Star size={16} />
+                <span className="hidden md:inline">设为头像</span>
               </button>
             )}
             {me.photos.length > 1 && <div className="absolute bottom-1 right-1 flex gap-1 md:hidden">
-              <button aria-label={`将第 ${i + 1} 张照片前移`} className="rounded bg-card/95 p-1 text-primary disabled:opacity-40" disabled={saving || i === 0} onClick={() => movePhoto(i, i - 1)}><ArrowLeft size={15} /></button>
-              <button aria-label={`将第 ${i + 1} 张照片后移`} className="rounded bg-card/95 p-1 text-primary disabled:opacity-40" disabled={saving || i >= me.photos.length - 1} onClick={() => movePhoto(i, i + 1)}><ArrowRight size={15} /></button>
+              <button aria-label={`将第 ${i + 1} 张照片前移`} className="flex h-11 w-11 items-center justify-center rounded-md bg-card/95 text-primary shadow-sm disabled:opacity-40" disabled={saving || i === 0} onClick={() => movePhoto(i, i - 1)}><ArrowLeft size={19} /></button>
+              <button aria-label={`将第 ${i + 1} 张照片后移`} className="flex h-11 w-11 items-center justify-center rounded-md bg-card/95 text-primary shadow-sm disabled:opacity-40" disabled={saving || i >= me.photos.length - 1} onClick={() => movePhoto(i, i + 1)}><ArrowRight size={19} /></button>
             </div>}
             {me.photos.length > 1 && (
               <button
                 aria-label="删除照片"
-                className="absolute right-1.5 top-1.5 rounded-full bg-red-ink/70 p-1 text-primary-foreground opacity-100 transition md:opacity-0 md:group-hover:opacity-100"
+                className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-full bg-red-ink/80 text-primary-foreground transition hover:bg-red-ink md:right-1.5 md:top-1.5 md:h-7 md:w-7 md:opacity-0 md:group-hover:opacity-100"
                 disabled={saving}
                 onClick={() => {
                   if (saving) return
@@ -133,7 +133,7 @@ export function PhotoManager() {
                     .finally(() => setSaving(false))
                 }}
               >
-                <X size={12} />
+                <X size={17} />
               </button>
             )}
           </div>

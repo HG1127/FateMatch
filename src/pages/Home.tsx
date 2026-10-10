@@ -248,7 +248,7 @@ function MemberDashboard() {
         <div className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs tracking-[.35em] text-gold">今天的随缘网</p>
-            <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">{me.nickname}，今天先做一件有价值的事</h1>
+            <h1 className="mt-2 font-xing text-3xl leading-snug text-foreground sm:text-4xl md:text-5xl">{me.nickname}，今天先做一件有价值的事</h1>
             <p className="mt-2 text-sm text-muted-foreground">不追求多刷人，先处理真实回应、真实推荐和已经答应的见面。</p>
           </div>
           <Link to="/trust" className="text-xs text-primary transition hover:text-primary/80">安全与隐私说明 →</Link>
@@ -256,16 +256,16 @@ function MemberDashboard() {
 
         <Link to={priority.to} className="card-cn group block rounded-xl !border-gold/50 p-5 transition hover:-translate-y-0.5 hover:shadow-lift md:p-7">
           <p className="text-xs tracking-[.25em] text-gold">{priority.kicker}</p>
-          <div className="mt-2 flex items-start justify-between gap-4">
+          <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div>
               <h2 className="font-xing text-2xl text-foreground md:text-3xl">{priority.title}</h2>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{priority.desc}</p>
             </div>
-            <span className="btn-gold shrink-0 !px-4 !py-2 text-xs">{priority.action}<ChevronRight size={14} /></span>
+            <span className="btn-gold min-h-11 w-full shrink-0 !px-4 !py-2 text-sm sm:w-auto">{priority.action}<ChevronRight size={16} /></span>
           </div>
         </Link>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-3">
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4">
           <Link to="/matches" className="card-cn rounded-lg p-4 transition hover:border-primary/40 hover:shadow-card">
             <p className="flex items-center gap-2 text-sm font-semibold text-foreground"><MessageCircleHeart size={16} className="text-primary" />待回复</p>
             <p className="cjk-latin mt-3 font-xing text-3xl text-primary">{unreadTotal}</p>
@@ -276,7 +276,7 @@ function MemberDashboard() {
             <p className="cjk-latin mt-3 font-xing text-3xl text-gold">{profile.pct}%</p>
             <p className="mt-1 text-xs text-muted-foreground">必要资料不完整时不会进入真人推荐池</p>
           </Link>
-          <Link to="/events" className="card-cn rounded-lg p-4 transition hover:border-primary/40 hover:shadow-card">
+          <Link to="/events" className="card-cn col-span-2 rounded-lg p-4 transition hover:border-primary/40 hover:shadow-card md:col-span-1">
             <p className="flex items-center gap-2 text-sm font-semibold text-foreground"><CalendarHeart size={16} className="text-primary" />已约活动</p>
             <p className="cjk-latin mt-3 font-xing text-3xl text-primary">{joined.length}</p>
             <p className="mt-1 text-xs text-muted-foreground">{nextEvent ? `最近：${nextEvent.date} · ${nextEvent.title}` : '当前没有已确认的未来活动'}</p>

@@ -22,6 +22,7 @@ export function ExplorePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [retryKey, setRetryKey] = useState(0)
+  const [resetFilterKey, setResetFilterKey] = useState(0)
   const loadDiscoveryRef = useRef(loadDiscoveryProfiles)
   useEffect(() => { loadDiscoveryRef.current = loadDiscoveryProfiles }, [loadDiscoveryProfiles])
 
@@ -72,16 +73,28 @@ export function ExplorePage() {
     setError('')
     setPage(p => p + 1)
   }
+  const clearFilters = () => {
+    resetQuery()
+    setCity('')
+    setDistrict('')
+    setTags([])
+    setVerifiedOnly(false)
+    setAgeMin('')
+    setAgeMax('')
+    setResetFilterKey(key => key + 1)
+  }
+
 
   return (
-    <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
-      <div className="mb-8 text-center">
+    <div className="clouds-paper mx-auto max-w-6xl px-4 py-7 md:py-14">
+      <div className="mb-5 text-center md:mb-8">
         <p className="text-xs tracking-[.4em] text-gold">兴趣匹配</p>
         <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">寻一位知音</h1>
         <p className="mt-2 text-sm text-muted-foreground">同好之人自然相近，同城之缘更近一步；先按真实资格筛选，再用规则参考辅助判断</p>
       </div>
 
       <FilterBar
+        key={resetFilterKey}
         city={city}
         setCity={c => { resetQuery(); setCity(c); setDistrict('') }}
         district={district}
@@ -94,6 +107,7 @@ export function ExplorePage() {
         ageMax={ageMax}
         setAgeMin={v => { resetQuery(); setAgeMin(v) }}
         setAgeMax={v => { resetQuery(); setAgeMax(v) }}
+        onReset={clearFilters}
       />
 
       {error && !list.length ? (
@@ -130,7 +144,7 @@ export function ExplorePage() {
           <p className="mt-2 text-sm text-muted-foreground">
             {district ? '当前区县没有满足双方必要条件的真人候选。放宽到整座城市,或换个条件试试。' : '当前没有满足双方必要条件的真人候选，可以放宽筛选。'}
           </p>
-          <button className="btn-outline mt-6" onClick={() => { resetQuery(); setCity(''); setDistrict(''); setTags([]); setVerifiedOnly(false); setAgeMin(''); setAgeMax('') }}>清空筛选</button>
+          <button className="btn-outline mt-6" onClick={clearFilters}>放宽条件并重试</button>
         </div>
       )}
 

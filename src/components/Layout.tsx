@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
-import { CalendarHeart, ChevronDown, Menu, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
+import { CalendarHeart, ChevronDown, Compass, Menu, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
 import { useStore } from '@/lib/store-context'
 import type { FeatureKey } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -20,9 +20,10 @@ const GUEST_NAV: Array<{ to: string; label: string; feat?: FeatureKey }> = [
   { to: '/trust', label: '安全与隐私' },
 ]
 
-/** 移动端仅保留四个最高频任务入口。 */
+/** 手机底部五个拇指友好的入口，发现直接展开底部功能面板。 */
 const MOBILE_TABS: Array<{ to: string; label: string; icon: typeof Sparkles; feat?: FeatureKey }> = [
   { to: '/', label: '推荐', icon: Sparkles },
+  { to: '#discover', label: '发现', icon: Compass },
   { to: '/events', label: '活动', icon: CalendarHeart, feat: 'events' },
   { to: '/matches', label: '消息', icon: MessageCircleHeart, feat: 'matches' },
   { to: '/me', label: '我的', icon: UserRound },
@@ -169,6 +170,8 @@ export function Layout() {
   const { pathname, search } = useLocation()
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   const moreTriggerRef = useRef<HTMLButtonElement>(null)
+  const discoverTriggerRef = useRef<HTMLButtonElement>(null)
+  const [moreFromBottom, setMoreFromBottom] = useState(false)
   const [editingField, setEditingField] = useState(false)
   const chatTargetId = new URLSearchParams(search).get('with')
   const chatOpenOnMobile = pathname === '/matches' && !!me && !!chatTargetId && conversations().some(c => c.user.id === chatTargetId)
@@ -278,7 +281,7 @@ export function Layout() {
               aria-label="打开更多功能"
               aria-haspopup="dialog"
               aria-expanded={mobileMoreOpen}
-              onClick={() => setMobileMoreOpen(true)}
+              onClick={() => { setMoreFromBottom(false); setMobileMoreOpen(true) }}
               className="flex h-11 min-w-11 items-center justify-center gap-1 rounded-lg border border-border bg-card px-2.5 text-xs font-semibold text-foreground md:hidden"
             >
               <Menu size={18} aria-hidden="true" />
@@ -291,7 +294,7 @@ export function Layout() {
       <MobileMoreMenu
         open={mobileMoreOpen}
         onClose={() => setMobileMoreOpen(false)}
-        triggerRef={moreTriggerRef}
+        triggerRef={moreFromBottom ? discoverTriggerRef : moreTriggerRef}
         items={MORE}
         isAdmin={isAdmin}
         isMember={!!me}
@@ -347,12 +350,30 @@ export function Layout() {
         </div>
       </footer>
 
-      {/* 登录后的移动端仅保留四个核心任务入口 */}
+      {/* 手机主导航：高频任务 + 单手即可触达的“发现”底部面板 */}
       {me && !chatOpenOnMobile && !editingField && (
         <nav data-mobile-nav aria-label="手机主导航" className="fixed inset-x-0 bottom-0 z-40 border-t border-gold/25 bg-background/95 shadow-[0_-6px_24px_-16px_rgba(50,17,19,.45)] backdrop-blur md:hidden">
           <div className="mx-auto flex max-w-md items-stretch justify-between px-2 pb-[env(safe-area-inset-bottom)]">
             {MOBILE_TABS.filter(t => !t.feat || featureOn(t.feat)).map(t => {
               const Icon = t.icon
+              if (t.to === '#discover') {
+                const selected = mobileMoreOpen || MORE.some(entry => pathname === entry.to)
+                return (
+                  <button
+                    key={t.to}
+                    ref={discoverTriggerRef}
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-expanded={mobileMoreOpen}
+                    aria-label="发现更多功能"
+                    onClick={() => { setMoreFromBottom(true); setMobileMoreOpen(true) }}
+                    className={cn('relative mx-0.5 flex min-h-14 flex-1 flex-col items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] transition active:scale-[.97]', selected ? 'bg-primary/10 font-semibold text-primary' : 'text-muted-foreground')}
+                  >
+                    <Icon size={21} aria-hidden="true" />
+                    发现
+                  </button>
+                )
+              }
               return (
                 <NavLink
                   key={t.to}

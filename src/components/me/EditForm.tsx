@@ -5,6 +5,7 @@ import { useStore } from '@/lib/store-context'
 import type { Gender } from '@/lib/store'
 import { Field, Tag } from '@/components/ui'
 import { CityPicker } from '@/components/ui/CityPicker'
+import { DateFields } from '@/components/ui/DateFields'
 import { ageOf, hashStr, INTERESTS } from '@/lib/store-model'
 
 export function EditForm() {
@@ -21,6 +22,11 @@ export function EditForm() {
   const [interests, setInterests] = useState<string[]>(me?.interests ?? [])
   const [saving, setSaving] = useState(false)
   const [bioSuggestion, setBioSuggestion] = useState('')
+  const [dateFieldReset, setDateFieldReset] = useState(0)
+  const adultCutoff = new Date()
+  adultCutoff.setFullYear(adultCutoff.getFullYear() - 18)
+  const oldestAllowedBirthDate = `${adultCutoff.getFullYear()}-${String(adultCutoff.getMonth() + 1).padStart(2, '0')}-${String(adultCutoff.getDate()).padStart(2, '0')}`
+
 
   const draftSnapshot = JSON.stringify({
     nickname: nickname.trim(),
@@ -66,6 +72,7 @@ export function EditForm() {
     setBio(me.bio ?? '')
     setInterests(me.interests ?? [])
     setBioSuggestion('')
+    setDateFieldReset(key => key + 1)
   }, [dataReady, me])
 
   useEffect(() => {
@@ -123,6 +130,7 @@ export function EditForm() {
     setBio(me.bio ?? '')
     setInterests(me.interests ?? [])
     setBioSuggestion('')
+    setDateFieldReset(key => key + 1)
   }
 
   const save = async () => {
@@ -207,9 +215,10 @@ export function EditForm() {
             <option value="male">男性</option>
           </select>
         </Field>
-        <Field label="出生日期">
-          <input className="input-cn" type="date" value={birthDate} max={new Date().toISOString().slice(0, 10)} onChange={e => setBirthDate(e.target.value)} />
-        </Field>
+        <div>
+          <p className="mb-1.5 text-xs font-semibold tracking-wider text-foreground/70">出生日期</p>
+          <DateFields key={dateFieldReset} label="出生日期" value={birthDate} onChange={setBirthDate} min="1900-01-01" max={oldestAllowedBirthDate} />
+        </div>
         <Field label="身高(cm，可不填)">
           <input className="input-cn" type="number" min={140} max={220} value={height} onChange={e => setHeight(e.target.value)} />
         </Field>

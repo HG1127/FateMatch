@@ -43,6 +43,7 @@ export function EventsPage() {
   const [editing, setEditing] = useState<EventItem | null>(null)
   const loadEventsRef = useRef(loadEventsPage)
   const loadDetailRef = useRef(loadEventDetail)
+  const calendarRequestRef = useRef(0)
 
   useEffect(() => { loadEventsRef.current = loadEventsPage }, [loadEventsPage])
   useEffect(() => { loadDetailRef.current = loadEventDetail }, [loadEventDetail])
@@ -158,12 +159,21 @@ export function EventsPage() {
   }
 
   const loadCalendarRange = useCallback((from: string, to: string) => {
+    // 连续快速切换月份时，旧请求不能覆盖新月份的数据和加载状态。
+    const requestId = ++calendarRequestRef.current
     setCalendarLoading(true)
     setCalendarError('')
+    setCalendarIds([])
     void loadEventsRef.current({ page: 1, perPage: 120, scope: 'calendar', from, to, localFirst: false })
-      .then(res => setCalendarIds(res.items.map(e => e.id)))
-      .catch(e => setCalendarError(e instanceof Error ? e.message : '本月活动加载失败'))
-      .finally(() => setCalendarLoading(false))
+      .then(res => {
+        if (requestId === calendarRequestRef.current) setCalendarIds(res.items.map(e => e.id))
+      })
+      .catch(e => {
+        if (requestId === calendarRequestRef.current) setCalendarError(e instanceof Error ? e.message : '本月活动加载失败')
+      })
+      .finally(() => {
+        if (requestId === calendarRequestRef.current) setCalendarLoading(false)
+      })
   }, [])
 
   const closeForm = () => {

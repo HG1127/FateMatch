@@ -6,7 +6,7 @@ import { cityToken, locateRegion, provinceOfCity, PROVINCES, rawCityOf } from '@
 import { Tag } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
-export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTag, verifiedOnly, toggleVerifiedOnly, ageMin, ageMax, setAgeMin, setAgeMax }: {
+export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTag, verifiedOnly, toggleVerifiedOnly, ageMin, ageMax, setAgeMin, setAgeMax, onReset }: {
   city: string
   setCity: (c: string) => void
   district: string
@@ -19,6 +19,7 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
   ageMax: string
   setAgeMin: (value: string) => void
   setAgeMax: (value: string) => void
+  onReset: () => void
 }) {
   const [prov, setProv] = useState(() => provinceOfCity(city))
   const [cty, setCty] = useState(() => rawCityOf(city))
@@ -26,6 +27,7 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
   const province = PROVINCES.find(p => p.name === prov)
   const cityNode = province?.cities.find(c => c.name === cty)
   const districts = cityNode?.areas ?? []
+  const hasFilters = !!(prov || cty || city || district || tags.length || verifiedOnly || ageMin || ageMax)
 
   const locate = async () => {
     setLocating(true)
@@ -44,20 +46,31 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
   }
 
   return (
-    <div className="card-cn mb-8 space-y-4 rounded-lg p-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-xs font-semibold tracking-widest text-muted-foreground">城市</span>
-        <button
-          type="button"
-          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/40 px-2.5 py-1 text-[11px] text-primary transition hover:bg-primary hover:text-primary-foreground"
-          onClick={() => void locate()}
-          disabled={locating}
-        >
-          {locating ? <Loader2 size={11} className="animate-spin" /> : <LocateFixed size={11} />}
-          {locating ? '定位中…' : '定位到我'}
+    <div className="card-cn mb-6 space-y-4 rounded-xl p-3.5 sm:mb-8 sm:p-5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-foreground">筛选条件</p>
+        <button type="button" onClick={onReset} disabled={!hasFilters}
+          className="inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-semibold text-primary underline-offset-2 transition hover:underline disabled:cursor-default disabled:text-muted-foreground/60">
+          清空筛选
         </button>
+      </div>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-foreground">所在地区</span>
+          <button
+            type="button"
+            className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-full border border-primary/40 bg-card px-4 text-sm font-semibold text-primary transition hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
+            onClick={() => void locate()}
+            disabled={locating}
+          >
+            {locating ? <Loader2 size={17} className="animate-spin" /> : <LocateFixed size={17} />}
+            {locating ? '定位中…' : '定位到我'}
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <select
-          className="input-cn !w-28"
+          aria-label="筛选省份"
+          className="input-cn min-w-0"
           value={prov}
           onChange={e => {
             setProv(e.target.value)
@@ -70,7 +83,8 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
           {PROVINCES.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
         </select>
         <select
-          className="input-cn !w-32 disabled:opacity-50"
+          aria-label="筛选城市"
+          className="input-cn min-w-0 disabled:opacity-50"
           value={cty}
           disabled={!province}
           onChange={e => {
@@ -84,7 +98,8 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
           {province?.cities.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
         </select>
         <select
-          className="input-cn !w-32 disabled:opacity-50"
+          aria-label="筛选区县"
+          className="input-cn col-span-2 min-w-0 disabled:opacity-50 sm:col-span-1"
           value={district}
           disabled={!cityNode}
           onChange={e => setDistrict(e.target.value)}
@@ -93,16 +108,25 @@ export function FilterBar({ city, setCity, district, setDistrict, tags, toggleTa
           <option value="">{cityNode ? `${cityToken(cty, prov)} · 不限区县` : '先选城市'}</option>
           {districts.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
-        <span className="ml-auto hidden text-xs text-muted-foreground sm:block">同城优先 · 当前页按规则参考排序</span>
+        </div>
+        <p className="text-xs text-muted-foreground">同城优先 · 当前页按规则参考排序</p>
       </div>
-      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3 text-xs">
-        <span className="font-semibold text-muted-foreground">年龄偏好</span>
-        <label className="flex items-center gap-2">从 <input aria-label="最低年龄" type="number" min="18" max="100" inputMode="numeric" className="input-cn !w-20 !py-1" placeholder="18" value={ageMin} onChange={e => setAgeMin(e.target.value)} /> 岁</label>
-        <label className="flex items-center gap-2">到 <input aria-label="最高年龄" type="number" min="18" max="100" inputMode="numeric" className="input-cn !w-20 !py-1" placeholder="不限" value={ageMax} onChange={e => setAgeMax(e.target.value)} /> 岁</label>
-        <span className="text-muted-foreground">可选；仅影响本次筛选</span>
+      <div className="space-y-2 border-t border-border pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-foreground">年龄偏好</span>
+          <span className="text-xs text-muted-foreground">选填 · 18–100 岁</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block text-xs text-muted-foreground">最低年龄
+            <input aria-label="最低年龄" type="number" min="18" max="100" inputMode="numeric" className="input-cn mt-1" placeholder="18 岁" value={ageMin} onChange={e => setAgeMin(e.target.value)} />
+          </label>
+          <label className="block text-xs text-muted-foreground">最高年龄
+            <input aria-label="最高年龄" type="number" min="18" max="100" inputMode="numeric" className="input-cn mt-1" placeholder="不限" value={ageMax} onChange={e => setAgeMax(e.target.value)} />
+          </label>
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold tracking-widest text-muted-foreground">兴趣</span>
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <span className="w-full text-sm font-semibold text-foreground">兴趣偏好</span>
         {INTERESTS.map(t => (
           <Tag key={t} active={tags.includes(t)} onClick={() => toggleTag(t)}>{t}</Tag>
         ))}

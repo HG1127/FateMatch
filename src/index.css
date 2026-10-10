@@ -22,6 +22,19 @@ button:focus-visible, a:focus-visible, [role='button']:focus-visible {
   .btn-cn, .btn-primary, .btn-gold, .btn-outline, .btn-ghost { min-height: 44px; }
   [id^='profile-'], section[id], [role='heading'] { scroll-margin-top: calc(4.5rem + env(safe-area-inset-top)); }
 }
+/* 手机强调真实的可读性与触控层级；品牌标题依然保留中式书法。 */
+@media (max-width: 767px) {
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  }
+  .card-cn {
+    box-shadow: 0 3px 16px hsl(20 40% 20% / 0.07);
+  }
+  .card-cn::before { display: none; }
+  .input-cn { border-radius: 0.625rem; }
+  button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+  [role='dialog'] { overscroll-behavior: contain; }
+}
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }

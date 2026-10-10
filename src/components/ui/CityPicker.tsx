@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader2, LocateFixed, MapPin } from 'lucide-react'
 import { toast } from 'sonner'
 import { buildRegion, cityToken, locateRegion, PROVINCES } from '@/lib/region'
@@ -35,12 +35,25 @@ export function CityPicker({ city, region, onPick }: Props) {
   const [prov, setProv] = useState(init.prov)
   const [cty, setCty] = useState(init.cty)
   const [dist, setDist] = useState(init.dist)
+  const lastSent = useRef({ city, region: region ?? '' })
+  useEffect(() => {
+    if (city === lastSent.current.city && (region ?? '') === lastSent.current.region) return
+    const next = parseInit(city, region)
+    lastSent.current = { city, region: region ?? '' }
+    setProv(next.prov)
+    setCty(next.cty)
+    setDist(next.dist)
+  }, [city, region])
+
 
   const province = PROVINCES.find(p => p.name === prov)
   const cityNode = province?.cities.find(c => c.name === cty)
 
   const emit = (p: string, c: string, d: string) => {
-    onPick(c && p ? cityToken(c, p) : '', buildRegion(p, c, d))
+    const nextCity = c && p ? cityToken(c, p) : ''
+    const nextRegion = buildRegion(p, c, d)
+    lastSent.current = { city: nextCity, region: nextRegion }
+    onPick(nextCity, nextRegion)
   }
 
   const [locating, setLocating] = useState(false)
@@ -64,15 +77,16 @@ export function CityPicker({ city, region, onPick }: Props) {
     <div>
       <button
         type="button"
-        className="mb-1.5 inline-flex items-center gap-1 rounded-full border border-primary/40 px-2.5 py-1 text-[11px] text-primary transition hover:bg-primary hover:text-primary-foreground"
+        className="mb-2 inline-flex min-h-11 items-center gap-2 rounded-full border border-primary/40 bg-card px-4 text-sm font-semibold text-primary transition hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
         onClick={() => void locate()}
         disabled={locating}
       >
-        {locating ? <Loader2 size={11} className="animate-spin" /> : <LocateFixed size={11} />}
+        {locating ? <Loader2 size={17} className="animate-spin" /> : <LocateFixed size={17} />}
         {locating ? '定位中…' : '定位到我'}
       </button>
       <div className="grid gap-2 sm:grid-cols-3">
       <select
+        aria-label="选择省份"
         className="input-cn"
         value={prov}
         onChange={e => {
@@ -88,6 +102,7 @@ export function CityPicker({ city, region, onPick }: Props) {
         ))}
       </select>
       <select
+        aria-label="选择城市"
         className="input-cn"
         value={cty}
         disabled={!province}
@@ -103,6 +118,7 @@ export function CityPicker({ city, region, onPick }: Props) {
         ))}
       </select>
       <select
+        aria-label="选择区县"
         className="input-cn"
         value={dist}
         disabled={!cityNode}

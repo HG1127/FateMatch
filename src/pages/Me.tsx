@@ -212,11 +212,11 @@ export function MePage() {
                   }
                 }}
                 className={cn(
-                  'ml-auto flex h-5 w-9 items-center rounded-full border p-0.5 transition',
+                  'ml-auto flex min-h-11 min-w-14 items-center rounded-full border p-1.5 transition',
                   stealth ? 'justify-end border-gold bg-gold/30' : 'justify-start border-border bg-secondary',
                 )}
               >
-                <span className={cn('h-3.5 w-3.5 rounded-full transition', stealth ? 'bg-gold' : 'bg-muted-foreground/40')} />
+                <span className={cn('h-6 w-6 rounded-full transition', stealth ? 'bg-gold' : 'bg-muted-foreground/40')} />
               </button>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">

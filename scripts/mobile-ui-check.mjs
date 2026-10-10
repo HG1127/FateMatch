@@ -198,9 +198,11 @@ try {
         const height = await link.evaluate(el => el.getBoundingClientRect().height)
         assert(height >= 44, `${screen.width}px bottom tab target too small: ${height}`)
       }
-      await page.getByRole('button', { name: '打开更多功能' }).click()
+      await nav.getByRole('button', { name: '发现更多功能' }).click()
       await page.getByRole('navigation', { name: '手机更多功能' }).getByRole('link', { name: /兴趣筛选/ }).waitFor()
       await page.getByRole('button', { name: '关闭更多功能菜单' }).click()
+      assert(await nav.getByRole('button', { name: '发现更多功能' }).evaluate(el => document.activeElement === el),
+        'Closing discover sheet should restore focus to its bottom navigation trigger')
     }
 
     await page.getByLabel('会话列表').getByRole('button', { name: /打开与手机体验乙的聊天/ }).click()
@@ -251,6 +253,9 @@ try {
     await page.goto(origin + '/me', { waitUntil: 'domcontentloaded' })
     await page.getByRole('heading', { name: '打理自己的缘' }).waitFor({ timeout: 22000 })
     await checkWidth(page, screen, 'me')
+    const birthYear = page.getByRole('textbox', { name: '出生日期年份' })
+    await birthYear.waitFor({ state: 'visible' })
+    assert(await birthYear.inputValue() === '1994', 'Birth year should be instantly visible and directly editable')
     if (screen.width < 768) {
       const nickname = page.getByLabel('昵称', { exact: true })
       await nickname.focus()
@@ -266,8 +271,34 @@ try {
     await page.goto(origin + '/events', { waitUntil: 'domcontentloaded' })
     await page.getByRole('heading', { name: '同席之缘' }).waitFor({ timeout: 20000 })
     await checkWidth(page, screen, 'events')
+    await page.getByRole('button', { name: '活动日历' }).click()
+    const calendarYear = page.getByRole('combobox', { name: '日历年份' })
+    await calendarYear.waitFor({ state: 'visible' })
+    await calendarYear.selectOption(String(new Date().getFullYear() + 2))
+    await page.getByRole('combobox', { name: '日历月份' }).selectOption('2')
+    await checkWidth(page, screen, 'calendar jump')
+    await page.getByRole('button', { name: '回到本月' }).click()
+    await page.getByRole('button', { name: '全部活动' }).click()
+    await page.getByRole('button', { name: '发起一场活动' }).first().click()
+    const sheet = page.getByRole('dialog')
+    await sheet.getByRole('textbox', { name: '活动日期年份' }).waitFor()
+    await sheet.getByRole('button', { name: '明天' }).click()
+    assert(await sheet.getByRole('button', { name: '明天' }).getAttribute('aria-pressed') === 'true',
+      'Quick date action must select the right event date')
+    await checkWidth(page, screen, 'event form')
+    await sheet.getByRole('button', { name: '关闭' }).click()
+    await page.goto(origin + '/explore', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('heading', { name: '寻一位知音' }).waitFor({ timeout: 20000 })
+    await checkWidth(page, screen, 'explore filters')
+    await page.getByRole('combobox', { name: '筛选省份' }).selectOption({ label: '浙江省' })
+    assert(await page.getByRole('combobox', { name: '筛选省份' }).inputValue() === '浙江省',
+      'Province selection should remain visible even before selecting a city')
+    await page.getByRole('button', { name: '清空筛选' }).click()
+    assert(await page.getByRole('combobox', { name: '筛选省份' }).inputValue() === '',
+      'Clearing filters must clear the visible province selector too')
+    await checkWidth(page, screen, 'explore after reset')
     assert(!memberErrors.length, `${screen.width}px logged-in page error: ${memberErrors.join('; ')}`)
-    console.log(`PASS mobile UI ${screen.width}×${screen.height} (guest, menu, inbox, chat, profile, events)`)
+    console.log(`PASS mobile UI ${screen.width}×${screen.height} (guest, discovery, inbox, chat, profile, calendar, event-form, explore)`)
     await logged.close()
   }
   console.log('PASS all mobile layouts with fully synthetic API; no Neon credentials or network writes.')
