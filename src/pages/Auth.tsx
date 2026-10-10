@@ -62,8 +62,8 @@ export function AuthPage() {
   }
 
   return (
-    <div className="clouds-paper mx-auto max-w-2xl px-4 py-12 md:py-16">
-      <div className="mb-8 text-center">
+    <div className="clouds-paper mx-auto max-w-2xl px-4 py-7 sm:py-12 md:py-16">
+      <div className="mb-6 text-center sm:mb-8">
         <span className="seal mx-auto mb-4 flex h-14 w-14 font-xing text-2xl">缘</span>
         <h1 className="font-xing text-4xl text-foreground">{mode === 'register' ? '加入随缘网' : '别来无恙'}</h1>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -71,22 +71,24 @@ export function AuthPage() {
         </p>
       </div>
 
-      <div className="card-cn rounded-lg p-6 md:p-8">
+      <div className="card-cn rounded-xl p-4 sm:p-6 md:p-8">
         <div className="mb-6 grid grid-cols-2 rounded-md border border-border p-1 text-center text-sm">
           {(['login', 'register'] as const).map(m => (
             <button
               key={m}
+              type="button"
               onClick={() => setParams(m === 'register' ? { mode: 'register' } : {})}
-              className={cn('rounded px-4 py-2 transition', mode === m ? 'bg-primary font-semibold text-primary-foreground shadow-card' : 'text-foreground/60 hover:text-foreground')}
+              aria-pressed={mode === m}
+              className={cn('min-h-11 rounded px-4 py-2 transition', mode === m ? 'bg-primary font-semibold text-primary-foreground shadow-card' : 'text-foreground/60 hover:text-foreground')}
             >
               {m === 'login' ? '登录' : '注册'}
             </button>
           ))}
         </div>
-        <div className="space-y-3">
+        <form className="space-y-4 sm:space-y-3" onSubmit={e => { e.preventDefault(); void submit() }}>
           <label className="block text-left">
             <span className="mb-1.5 block text-xs font-semibold tracking-wider text-foreground/70">邮箱</span>
-            <input className="input-cn" type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={e => setEmail(e.target.value)} />
+            <input className="input-cn" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} enterKeyHint="next" placeholder="name@example.com" value={email} onChange={e => setEmail(e.target.value)} />
           </label>
           {mode === 'register' && (
             <label className="block text-left">
@@ -103,10 +105,10 @@ export function AuthPage() {
               placeholder={mode === 'register' ? '至少 8 位' : '输入密码'}
               value={pwd}
               onChange={e => setPwd(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && void submit()}
+              enterKeyHint={mode === 'register' ? 'next' : 'go'}
             />
           </label>
-          <label className="flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={showPassword} onChange={e => setShowPassword(e.target.checked)} />显示密码</label>
+          <label className="flex min-h-11 items-center gap-3 text-sm text-muted-foreground"><input type="checkbox" className="h-5 w-5 accent-primary" checked={showPassword} onChange={e => setShowPassword(e.target.checked)} />显示密码</label>
           {mode === 'register' && (
             <label className="block text-left">
               <span className="mb-1.5 block text-xs font-semibold tracking-wider text-foreground/70">确认密码</span>
@@ -117,20 +119,20 @@ export function AuthPage() {
                 placeholder="再次输入密码"
                 value={pwd2}
                 onChange={e => setPwd2(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && void submit()}
+                enterKeyHint="go"
               />
             </label>
           )}
           {mode === 'register' && (
-            <label className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
-              <input type="checkbox" className="mt-0.5" checked={adultConfirmed} onChange={e => setAdultConfirmed(e.target.checked)} />
+            <label className="flex min-h-14 items-start gap-3 rounded-md border border-border bg-secondary/40 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+              <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-primary" checked={adultConfirmed} onChange={e => setAdultConfirmed(e.target.checked)} />
               <span>我确认已满 18 周岁，并理解注册后仍需本人确认必要资料才会进入推荐池。</span>
             </label>
           )}
-          <button className="btn-primary w-full !py-2.5 disabled:opacity-50" disabled={busy} onClick={() => void submit()}>
+          <button type="submit" className="btn-primary min-h-12 w-full !py-2.5 text-base disabled:opacity-50" disabled={busy}>
             {busy ? '请稍候…' : mode === 'register' ? '注册并继续完善资料' : '登录'}
           </button>
-        </div>
+        </form>
       </div>
       <p className="mt-6 text-center text-xs text-muted-foreground">随缘网仅面向 18 周岁以上成年人 · 核验与隐私范围以实际功能和规则为准</p>
     </div>

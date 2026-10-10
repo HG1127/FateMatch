@@ -173,10 +173,10 @@ export function EventsPage() {
   }
 
   return (
-    <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
-      <div className="mb-8 text-center">
+    <div className="clouds-paper mx-auto max-w-6xl px-4 py-7 md:py-14">
+      <div className="mb-6 text-center md:mb-8">
         <p className="text-xs tracking-[.4em] text-gold">活动牵线</p>
-        <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">同席之缘</h1>
+        <h1 className="mt-2 font-xing text-3xl text-foreground sm:text-4xl md:text-5xl">同席之缘</h1>
         <p className="mt-2 text-sm text-muted-foreground">一场茶会、一次登高,比一百句开场白更自然——同城的相聚,优先安排</p>
         <button className="btn-gold mt-5 transition hover:-translate-y-0.5 hover:shadow-lift active:scale-[.97]" onClick={() => setFormOpen(true)}>
           <CalendarPlus size={16} />
@@ -208,12 +208,13 @@ export function EventsPage() {
         </div>
       )}
 
-      <div className="mb-6 flex flex-wrap justify-center gap-2">
+      <div aria-label="活动筛选" className="-mx-4 mb-6 flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-4 pb-2 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0">
         {FILTERS.map(f => (
           <button
             key={f.key}
             onClick={() => beginFilter(f.key)}
-            className={cn('rounded-full border px-4 py-1.5 text-sm transition', filter === f.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/70 hover:border-primary/40')}
+            aria-pressed={filter === f.key}
+            className={cn('min-h-11 shrink-0 snap-start whitespace-nowrap rounded-full border px-4 py-2 text-sm transition', filter === f.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-foreground/70 hover:border-primary/40')}
           >
             {f.label}
           </button>

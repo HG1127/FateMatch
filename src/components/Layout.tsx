@@ -1,10 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
-import { CalendarHeart, ChevronDown, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
+import { CalendarHeart, ChevronDown, Menu, MessageCircleHeart, Sparkles, UserRound } from 'lucide-react'
 import { useStore } from '@/lib/store-context'
 import type { FeatureKey } from '@/lib/store'
 import { cn } from '@/lib/utils'
 import { LocalAccountMenu } from '@/components/local/LocalAccountMenu'
+import { MobileMoreMenu } from '@/components/MobileMoreMenu'
 import { AvatarFrame, LevelSeal, LevelUpCelebration, NickName } from '@/components/ui'
 
 const MEMBER_NAV: Array<{ to: string; label: string; feat?: FeatureKey }> = [
@@ -165,6 +166,31 @@ export function MoreDropdown() {
 
 export function Layout() {
   const { me, dataReady, conversations, unread, featureOn, refreshChatSummaries } = useStore()
+  const { pathname, search } = useLocation()
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  const moreTriggerRef = useRef<HTMLButtonElement>(null)
+  const [editingField, setEditingField] = useState(false)
+  const chatTargetId = new URLSearchParams(search).get('with')
+  const chatOpenOnMobile = pathname === '/matches' && !!me && !!chatTargetId && conversations().some(c => c.user.id === chatTargetId)
+
+  // The soft keyboard must not fight the fixed bottom navigation for screen space.
+  useEffect(() => {
+    let pending: number | undefined
+    const syncEditing = () => {
+      const el = document.activeElement
+      setEditingField(el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement ||
+        (el instanceof HTMLInputElement && !['checkbox', 'radio', 'file', 'button', 'submit', 'hidden'].includes(el.type)))
+    }
+    const blur = () => { pending = window.setTimeout(syncEditing, 50) }
+    document.addEventListener('focusin', syncEditing)
+    document.addEventListener('focusout', blur)
+    return () => {
+      document.removeEventListener('focusin', syncEditing)
+      document.removeEventListener('focusout', blur)
+      if (pending) window.clearTimeout(pending)
+    }
+  }, [])
+
   const refreshRef = useRef(refreshChatSummaries)
   useEffect(() => { refreshRef.current = refreshChatSummaries }, [refreshChatSummaries])
   useEffect(() => {
@@ -185,15 +211,15 @@ export function Layout() {
   const isAdmin = me?.role === 'admin'
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-40 border-b border-gold/25 bg-background/90 backdrop-blur">
+    <div className="flex min-h-screen min-h-[100dvh] min-w-0 flex-col">
+      <header className="sticky top-0 z-40 border-b border-gold/25 bg-background/95 backdrop-blur" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <div className="lattice" />
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4">
-          <Link to="/" className="flex items-center gap-2.5">
-            <span className="seal h-9 w-9 font-xing text-xl">缘</span>
-            <span className="leading-tight">
-              <span className="block font-xing text-2xl text-primary">随缘网</span>
-              <span className="block text-[10px] tracking-[.3em] text-muted-foreground">一切相遇皆是缘</span>
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-2 px-3 sm:h-16 sm:px-4 md:gap-4">
+          <Link to="/" className="flex min-w-0 items-center gap-2 sm:gap-2.5" aria-label="随缘网首页">
+            <span className="seal h-8 w-8 shrink-0 font-xing text-lg sm:h-9 sm:w-9 sm:text-xl">缘</span>
+            <span className="min-w-0 leading-tight">
+              <span className="block whitespace-nowrap font-xing text-xl text-primary sm:text-2xl">随缘网</span>
+              <span className="hidden text-[10px] tracking-[.3em] text-muted-foreground sm:block">一切相遇皆是缘</span>
             </span>
           </Link>
           <nav className="hidden items-center gap-1 md:flex">
@@ -236,9 +262,9 @@ export function Layout() {
               </NavLink>
             )}
           </nav>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             {me && (
-              <Link to="/me" className="flex items-center gap-2 rounded-full border border-border bg-card py-1 pl-1 pr-2 transition hover:border-primary/50">
+              <Link to="/me" className="hidden items-center gap-2 rounded-full border border-border bg-card py-1 pl-1 pr-2 transition hover:border-primary/50 md:flex">
                 <AvatarFrame user={me} className="h-7 w-7">
                   <img src={me.photos[0]} alt={me.nickname} className="h-full w-full rounded-full object-cover" />
                 </AvatarFrame>
@@ -246,18 +272,43 @@ export function Layout() {
                 <LevelSeal user={me} />
               </Link>
             )}
+            <button
+              ref={moreTriggerRef}
+              type="button"
+              aria-label="打开更多功能"
+              aria-haspopup="dialog"
+              aria-expanded={mobileMoreOpen}
+              onClick={() => setMobileMoreOpen(true)}
+              className="flex h-11 min-w-11 items-center justify-center gap-1 rounded-lg border border-border bg-card px-2.5 text-xs font-semibold text-foreground md:hidden"
+            >
+              <Menu size={18} aria-hidden="true" />
+              更多
+            </button>
             <LocalAccountMenu />
           </div>
         </div>
       </header>
+      <MobileMoreMenu
+        open={mobileMoreOpen}
+        onClose={() => setMobileMoreOpen(false)}
+        triggerRef={moreTriggerRef}
+        items={MORE}
+        isAdmin={isAdmin}
+        isMember={!!me}
+      />
 
-      <main className="flex-1">
+      <main className="min-w-0 flex-1">
         <Outlet />
       </main>
 
-      <footer className="clouds-red mt-16 text-primary-foreground">
+      <footer className={cn('clouds-red mt-10 text-primary-foreground md:mt-16', chatOpenOnMobile && 'hidden lg:block')}>
         <div className="lattice" />
-        <div className="mx-auto grid max-w-6xl gap-8 px-4 py-12 md:grid-cols-3">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-4 gap-y-1 px-4 py-4 text-center text-xs md:hidden">
+          <span>仅供18岁以上成年人</span>
+          <Link to="/trust#privacy" className="inline-flex min-h-11 items-center text-gold-soft underline-offset-2 hover:underline">隐私保护</Link>
+          <Link to="/trust#account" className="inline-flex min-h-11 items-center text-gold-soft underline-offset-2 hover:underline">账号与数据</Link>
+        </div>
+        <div className="mx-auto hidden max-w-6xl gap-8 px-4 py-12 md:grid md:grid-cols-3">
           <div>
             <div className="flex items-center gap-2.5">
               <span className="seal h-9 w-9 font-xing text-xl">缘</span>
@@ -288,7 +339,7 @@ export function Layout() {
             </ul>
           </div>
         </div>
-        <div className="border-t border-primary-foreground/15 py-4 text-center text-xs text-primary-foreground/50">
+        <div className="hidden border-t border-primary-foreground/15 py-4 text-center text-xs text-primary-foreground/50 md:block">
           <span className="inline-flex items-center gap-1.5">
             <MessageCircleHeart size={12} />
             随缘网 · 愿天下有情人终成眷属
@@ -297,8 +348,8 @@ export function Layout() {
       </footer>
 
       {/* 登录后的移动端仅保留四个核心任务入口 */}
-      {me && (
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-gold/25 bg-background/95 backdrop-blur md:hidden">
+      {me && !chatOpenOnMobile && !editingField && (
+        <nav data-mobile-nav aria-label="手机主导航" className="fixed inset-x-0 bottom-0 z-40 border-t border-gold/25 bg-background/95 shadow-[0_-6px_24px_-16px_rgba(50,17,19,.45)] backdrop-blur md:hidden">
           <div className="mx-auto flex max-w-md items-stretch justify-between px-2 pb-[env(safe-area-inset-bottom)]">
             {MOBILE_TABS.filter(t => !t.feat || featureOn(t.feat)).map(t => {
               const Icon = t.icon
@@ -309,13 +360,13 @@ export function Layout() {
                   end={t.to === '/'}
                   className={({ isActive }) =>
                     cn(
-                      'relative mx-0.5 flex flex-1 flex-col items-center gap-0.5 rounded-lg py-2 text-[10px] transition',
+                      'relative mx-0.5 flex min-h-14 flex-1 flex-col items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] transition active:scale-[.97]',
                       isActive ? 'bg-primary/10 font-semibold text-primary' : 'text-muted-foreground',
                     )
                   }
                 >
                   <span className="relative">
-                    <Icon size={18} />
+                    <Icon size={21} />
                     {t.to === '/matches' && mutualCount > 0 && (
                       <span className="absolute -right-2 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] text-primary-foreground">
                         {mutualCount}
@@ -329,7 +380,7 @@ export function Layout() {
           </div>
         </nav>
       )}
-      {me && <div className="h-14 md:hidden" />}
+      {me && !chatOpenOnMobile && !editingField && <div aria-hidden="true" className="h-[calc(3.5rem+env(safe-area-inset-bottom))] md:hidden" />}
       {/* 缘阶晋升贺窗: 全站挂载, 自己的缘阶升上去时弹一次 */}
       <LevelUpCelebration />
     </div>

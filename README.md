@@ -42,6 +42,17 @@ pnpm release:check:strict # 必要条件缺失时退出非零，阻止误发布
 
 GitHub Actions 分为 `.github/workflows/quality.yml`（代码质量）与 `.github/workflows/ci.yml`（生产 Docker 镜像构建 + 运行时资产自检）。CI 必须在受控分支提交并推送后才能运行；本机没有 Docker Engine 时不能用 Compose 静态检查代替镜像运行验收。
 
+## 移动端体验与主屏幕快捷方式
+
+独立手机版在 `feat/mobile-ux-responsive` 分支优化了手机主导航、更多功能面板、全屏聊天、表单输入、底部安全区域、活动筛选、弹窗和首页主要操作。提供 `manifest.webmanifest` 与本地应用图标，可在 HTTPS 可访问时添加到手机主屏幕；**不使用 Service Worker 缓存聊天、照片或登录信息**，不代表支持离线使用。
+
+```bash
+pnpm build
+pnpm mobile:check  # 无数据库凭据，合成浏览器模拟 320/375/390/430/768px
+```
+
+详见 `docs/24-随缘网移动端适配与验收.md`。移动端适配与中国大陆免 VPN 网络可达性是两个独立问题，不能混为一谈。
+
 ## 预发布与手机/真人试点（独立 staging）
 
 预发布必须配置**独立 Neon 数据库及 staging_* schema**，并通过受限 HTTPS 入口访问；严禁让测试人员访问正式 public 数据。工程已提供：

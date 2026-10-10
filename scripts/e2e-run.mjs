@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { assertIsolatedLocalDev } from './staging-local-target.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -37,6 +38,14 @@ if (!process.env.NEON_DSN) {
 if (!/^postgres(?:ql)?:\/\//i.test(process.env.NEON_DSN ?? '')) {
   console.error('[e2e] 缺少 NEON_DSN。请先配置 dev-secrets.local，或在当前终端设置 NEON_DSN。')
   process.exit(1)
+}
+
+// E2E creates/drops temporary schemas: never even connect to a production database.
+try {
+  assertIsolatedLocalDev({ NEON_DSN: process.env.NEON_DSN, STAGING_MODE: '1', NEON_SCHEMA: 'staging_e2e_guard' })
+} catch {
+  console.error('[e2e] 连接目标不是独立 suiyuan_staging 数据库；已禁止运行数据库写入测试。请在本机使用专用 Staging 凭据。')
+  process.exit(2)
 }
 
 const cli = path.join(ROOT, 'node_modules', '@playwright', 'test', 'cli.js')

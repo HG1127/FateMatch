@@ -17,6 +17,7 @@
     "staging:smoke": "node scripts/staging-smoke.mjs",
     "vercel:check": "node scripts/vercel-check.mjs",
     "standalone:check": "node scripts/standalone-check.mjs",
+    "mobile:check": "node scripts/mobile-ui-check.mjs",
     "uploads:gc": "node scripts/upload-gc.mjs",
     "uploads:migrate": "node scripts/upload-migrate.mjs",
     "build": "tsc -b && vite build",

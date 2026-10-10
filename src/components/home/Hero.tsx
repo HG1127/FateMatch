@@ -14,12 +14,12 @@ export function Hero() {
   return (
     <section className="clouds-red relative overflow-hidden text-primary-foreground">
       <span className="pointer-events-none absolute -right-10 top-6 select-none font-xing text-[16rem] leading-none text-gold-soft/10">囍</span>
-      <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-16 md:grid-cols-2 md:py-24">
+      <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-11 sm:py-16 md:grid-cols-2 md:py-24">
         <div className="animate-fade-up">
           <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-gold-soft/40 bg-red-ink/40 px-3 py-1 text-xs tracking-[.3em] text-gold-soft">
             古典 · 真诚 · 缘分
           </p>
-          <h1 className="font-xing text-6xl leading-tight md:text-7xl">
+          <h1 className="font-xing text-5xl leading-tight sm:text-6xl md:text-7xl">
             一切相遇
             <br />
             皆是<span className="text-gold-soft">缘</span>
@@ -27,12 +27,12 @@ export function Hero() {
           <p className="mt-5 max-w-md text-base leading-relaxed text-primary-foreground/80">
             随缘网,面向成年人的认真交往社区。资料由本人填写,核验状态按实际记录展示；用少量推荐、兴趣和同城场景帮助双方慢慢了解。
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <Link to={me ? '/yuanfen' : joins} className="btn-gold !px-7 !py-3 !text-base transition hover:-translate-y-0.5 hover:shadow-lift active:scale-[.97]">
+          <div className="mt-7 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:flex-wrap">
+            <Link to={me ? '/yuanfen' : joins} className="btn-gold w-full !px-5 !py-3 !text-base transition hover:-translate-y-0.5 hover:shadow-lift active:scale-[.97] sm:w-auto sm:!px-7">
               <Sparkles size={18} />
               开始随缘
             </Link>
-            <Link to={me ? '/explore' : joins} className="btn-cn border border-gold-soft/50 px-7 py-3 text-base text-gold-soft transition hover:-translate-y-0.5 hover:bg-red-ink/40 active:scale-[.97]">
+            <Link to={me ? '/explore' : joins} className="btn-cn w-full border border-gold-soft/50 px-5 py-3 text-base text-gold-soft transition hover:-translate-y-0.5 hover:bg-red-ink/40 active:scale-[.97] sm:w-auto sm:px-7">
               <HeartHandshake size={18} />
               看看兴趣匹配
             </Link>

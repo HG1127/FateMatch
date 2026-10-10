@@ -64,11 +64,16 @@ export function MePage() {
   const myReports = reports.filter(r => r.by === me.id).sort((a, b) => b.at - a.at)
 
   return (
-    <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
-      <div className="mb-8 text-center">
+    <div className="clouds-paper mx-auto max-w-6xl px-4 py-7 md:py-14">
+      <div className="mb-5 text-center md:mb-8">
         <p className="text-xs tracking-[.4em] text-gold">我的主页</p>
-        <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">打理自己的缘</h1>
+        <h1 className="mt-2 font-xing text-3xl text-foreground sm:text-4xl md:text-5xl">打理自己的缘</h1>
       </div>
+      <nav aria-label="我的快捷操作" className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:hidden">
+        <a href="#profile-editor" className="btn-primary min-h-12 !px-3 text-center text-sm">编辑基本资料</a>
+        <a href="#profile-photos" className="btn-outline min-h-12 !px-3 text-center text-sm">管理我的照片</a>
+        <a href="#account-security" className="btn-outline col-span-2 min-h-12 !px-3 text-center text-sm sm:col-span-1">账号与隐私设置</a>
+      </nav>
 
       {!isProfileReadyForMatching(me) && <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gold/50 bg-gold/10 p-4"><div><p className="font-semibold text-foreground">只需确认四项必要资料，即可进入真人推荐</p><p className="mt-1 text-xs text-muted-foreground">性别、希望认识的对象、出生日期、城市；兴趣和职业都可以日后补充。</p></div><a className="btn-primary" href="#profile-editor">立即完善</a></div>}
       {historyLoading && (
@@ -81,10 +86,10 @@ export function MePage() {
         </div>
       )}
 
-      <div className="grid gap-8 lg:grid-cols-[320px_1fr]">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:gap-8">
         <div className="space-y-6">
           <div className="card-cn overflow-hidden rounded-lg">
-            <img src={me.photos[0]} alt={me.nickname} className="aspect-[3/4] w-full object-cover" />
+            <img src={me.photos[0]} alt={me.nickname} className="h-60 w-full object-cover object-center sm:h-80 lg:aspect-[3/4] lg:h-auto" />
             <div className="space-y-2 p-4">
               <p className="font-xing text-2xl text-foreground">
                 <NickName user={me} />
@@ -220,7 +225,7 @@ export function MePage() {
                 : '开启后浏览他人资料不留足迹。作为交换,你也将看不到谁看过你。'}
             </p>
           </div>
-            <div className="card-cn rounded-lg p-4 text-sm">
+            <div id="account-security" className="card-cn scroll-mt-24 rounded-lg p-4 text-sm">
               <p className="flex items-center gap-1.5 font-semibold text-foreground">
                 <KeyRound size={15} className="text-gold" />
                 账号安全

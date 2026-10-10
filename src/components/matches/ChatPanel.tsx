@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ImagePlus, Loader2, RefreshCw, Send, Sparkles, X } from 'lucide-react'
+import { ChevronDown, ImagePlus, Loader2, RefreshCw, Send, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
@@ -34,6 +34,7 @@ export function ChatPanel({ user }: { user: User }) {
   const [pendingImgs, setPendingImgs] = useState<string[]>([])
   const [lb, setLb] = useState('')
   const [sending, setSending] = useState(false)
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [retryKey, setRetryKey] = useState(0)
@@ -159,8 +160,8 @@ export function ChatPanel({ user }: { user: User }) {
 
   return (
     <>
-      <div className="flex h-[min(72svh,540px)] min-h-[360px] flex-col sm:h-[540px]">
-      <div ref={boxRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div data-mobile-chat-panel className="relative flex min-h-0 min-w-0 flex-1 flex-col lg:h-[540px] lg:min-h-[360px] lg:flex-none">
+      <div ref={boxRef} aria-label="聊天消息列表" className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 sm:p-4">
         {loading && msgs.length === 0 ? (
           <div className="pt-16 text-center text-xs text-muted-foreground">
             <Loader2 size={18} className="mx-auto mb-2 animate-spin text-primary" />
@@ -195,7 +196,7 @@ export function ChatPanel({ user }: { user: User }) {
               )}
               <div className={cn('flex items-end gap-2', m.from === me.id ? 'justify-end' : 'justify-start')}>
                 {m.from !== me.id && <img src={user.photos[0]} alt="" className="h-7 w-7 rounded-full object-cover" />}
-                <div className={cn('flex max-w-[70%] flex-col', m.from === me.id ? 'items-end' : 'items-start')}>
+                <div className={cn('flex min-w-0 max-w-[82%] flex-col sm:max-w-[70%]', m.from === me.id ? 'items-end' : 'items-start')}>
                   {m.recalled ? (
                     <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs italic text-muted-foreground">撤回了一条消息</p>
                   ) : (
@@ -219,7 +220,7 @@ export function ChatPanel({ user }: { user: User }) {
                         )
                       })()}
                       {m.text && (
-                        <p className={cn('px-3 py-2 text-sm leading-relaxed', m.from === me.id ? 'text-primary-foreground' : 'text-foreground')}>
+                        <p className={cn('break-words px-3 py-2 text-sm leading-relaxed [overflow-wrap:anywhere]', m.from === me.id ? 'text-primary-foreground' : 'text-foreground')}>
                           {m.text}
                         </p>
                       )}
@@ -231,7 +232,7 @@ export function ChatPanel({ user }: { user: User }) {
                       <>
                         <span className={cn('ml-1', m.read ? 'text-gold' : 'opacity-60')}>{m.read ? '已读' : '未读'}</span>
                         <button
-                          className="ml-1 underline-offset-2 transition hover:text-primary hover:underline"
+                          className="ml-1 inline-flex min-h-10 items-center rounded-md px-2 underline-offset-2 transition hover:bg-primary/5 hover:text-primary hover:underline sm:min-h-0 sm:px-0"
                           onClick={() => {
                             if (Date.now() - m.at > 2 * 60_000) {
                               toast('逾时两分钟,此句收不回了')
@@ -278,19 +279,34 @@ export function ChatPanel({ user }: { user: User }) {
           <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">只作为你自己的试点反馈，不通知对方，也不会自动改变互配、聊天或推荐。</p>
         </div>
       )}
-      <div className="flex gap-1.5 overflow-x-auto border-t border-border px-3 pt-2">
+      <div className="flex items-center justify-between border-t border-border px-3 py-1.5 lg:hidden">
+        <span className="text-xs text-muted-foreground">给对方写一句真诚的问候</span>
+        <button type="button" aria-controls="chat-quick-actions" aria-expanded={quickActionsOpen}
+          onClick={() => setQuickActionsOpen(v => !v)}
+          className="flex min-h-10 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-primary">
+          快捷回复 <ChevronDown size={16} className={cn('transition-transform', quickActionsOpen && 'rotate-180')} />
+        </button>
+      </div>
+      <div id="chat-quick-actions" className={cn(
+        'min-w-0 lg:block',
+        quickActionsOpen
+          ? 'absolute inset-x-2 bottom-24 z-30 max-h-[min(36dvh,220px)] overflow-y-auto rounded-xl border border-border bg-background p-1 shadow-lift lg:static lg:max-h-none lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none'
+          : 'hidden',
+      )}>
+      <div className="flex gap-1.5 overflow-x-auto overscroll-x-contain border-t border-border px-3 pt-2 pb-1">
         {QUICK_PHRASES.map(q => (
           <button
             key={q}
-            className="shrink-0 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+            className="min-h-10 shrink-0 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground transition hover:border-primary/50 hover:text-primary"
             onClick={() => setText(prev => prev.trim() ? `${prev.trimEnd()}\n${q}`.slice(0, 2000) : q)}
           >
             {q}
           </button>
         ))}
       </div>
-      <div className="px-3 pt-1">
+      <div className="px-3 py-1">
         <EmojiRow onPick={e => setText(t => t + e)} />
+      </div>
       </div>
       {pendingImgs.length > 0 && (
         <div className="flex flex-wrap items-start gap-2 px-3 pt-2">
@@ -298,28 +314,30 @@ export function ChatPanel({ user }: { user: User }) {
             <div key={i} className="relative">
               <img src={src} alt={`待发送图片 ${i + 1}`} className="h-16 w-16 rounded-md border border-border object-cover" />
               <button
-                className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-ink text-primary-foreground shadow-card transition hover:opacity-80"
+                className="absolute -right-2 -top-2 flex h-8 w-8 items-center justify-center rounded-full bg-red-ink text-primary-foreground shadow-card transition hover:opacity-80"
                 onClick={() => setPendingImgs(p => p.filter((_, x) => x !== i))}
                 aria-label="移除图片"
               >
-                <X size={9} />
+                <X size={14} />
               </button>
             </div>
           ))}
           <span className="cjk-latin mt-12 text-[10px] text-muted-foreground">{pendingImgs.length}/9</span>
         </div>
       )}
-      <div className="flex flex-wrap gap-2 p-3">
+      <div className="flex min-w-0 items-end gap-1.5 border-t border-border p-2.5 sm:gap-2 sm:p-3">
         <button
-          className="btn-outline shrink-0 !px-3 transition active:scale-95"
+          className="btn-outline min-h-11 shrink-0 !px-2.5 sm:!px-3 transition active:scale-95"
+          aria-label="生成破冰开场白"
           title="破冰助手:按共同兴趣生成开场白"
           onClick={() => setText(prev => prev.trim() ? `${prev.trimEnd()}\n${icebreakerFor(user)}`.slice(0, 2000) : icebreakerFor(user))}
         >
-          <Sparkles size={15} />
-          破冰
+          <Sparkles size={17} />
+          <span className="hidden sm:inline">破冰</span>
         </button>
         <button
-          className="btn-outline shrink-0 !px-3 transition active:scale-95"
+          className="btn-outline min-h-11 shrink-0 !px-3 transition active:scale-95"
+          aria-label="选择图片"
           title="发送图片"
           onClick={() => imgRef.current?.click()}
         >
@@ -337,13 +355,15 @@ export function ChatPanel({ user }: { user: User }) {
         />
         <textarea
           aria-label="聊天消息草稿"
-          className="input-cn min-w-0 flex-[1_1_48%] resize-y"
+          className="input-cn min-h-11 min-w-0 flex-1 resize-none !text-base sm:resize-y"
           rows={2}
           placeholder="写一句问候…"
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            // Touch keyboards use Return to insert newlines; desktop Enter sends.
+            const touchKeyboard = window.matchMedia?.('(pointer: coarse)').matches ?? false
+            if (!touchKeyboard && e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               void send()
             }
@@ -351,15 +371,15 @@ export function ChatPanel({ user }: { user: User }) {
           maxLength={2000}
         />
         <button
-          className="btn-primary shrink-0 !px-4 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          className="btn-primary min-h-11 min-w-11 shrink-0 !px-3 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => void send()}
           disabled={sending || (!text.trim() && !pendingImgs.length)}
           aria-label="发送"
         >
           <Send size={16} />
         </button>
-      <p className="px-3 pb-2 text-[11px] text-muted-foreground">Enter 发送 · Shift+Enter 换行 · 文字草稿只在此浏览器标签页暂存</p>
       </div>
+      <p className="hidden px-3 pb-2 text-[11px] text-muted-foreground sm:block">Enter 发送 · Shift+Enter 换行 · 文字草稿只在此浏览器标签页暂存</p>
       </div>
       <Lightbox src={lb} onClose={() => setLb('')} />
     </>

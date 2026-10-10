@@ -32,6 +32,10 @@ jobs:
         run: pnpm build
       - name: Standalone platform independence check
         run: pnpm standalone:check
+      - name: Install Chromium for mobile synthetic regression
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Mobile UX browser regression (mocked API, no Neon credentials)
+        run: pnpm mobile:check
       - name: Build Vercel static frontend and validate split routing without calling a backend
         env:
           SUIYUAN_DEPLOY_MODE: staging

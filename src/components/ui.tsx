@@ -48,10 +48,10 @@ export function Modal({ open, onClose, children, wide }: { open: boolean; onClos
   }, [open])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       <div className="absolute inset-0 bg-red-ink/60 backdrop-blur-sm" onClick={onClose} />
-      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="内容详情" tabIndex={-1} className={cn('relative card-cn rounded-lg w-full max-h-[88vh] overflow-y-auto animate-pop', wide ? 'max-w-3xl' : 'max-w-md')}>
-        <button aria-label="关闭" onClick={onClose} className="absolute right-3 top-3 z-10 p-1.5 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground transition">
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="内容详情" tabIndex={-1} className={cn('relative card-cn w-full max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] overflow-y-auto overscroll-contain rounded-t-2xl outline-none sm:max-h-[88dvh] sm:rounded-lg sm:animate-pop', wide ? 'sm:max-w-3xl' : 'sm:max-w-md')} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        <button aria-label="关闭" onClick={onClose} className="absolute right-2 top-2 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-card/90 text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground sm:right-3 sm:top-3">
           <X size={18} />
         </button>
         {children}
@@ -113,7 +113,7 @@ export function Tag({ active, onClick, children }: { active?: boolean; onClick?:
       type="button"
       onClick={onClick}
       className={cn(
-        'rounded-full border px-3 py-1 text-xs transition select-none',
+        'min-h-11 sm:min-h-10 rounded-full border px-3 py-1.5 text-xs transition select-none',
         active ? 'bg-primary text-primary-foreground border-primary shadow-card' : 'bg-card border-border text-foreground/70 hover:border-primary/50 hover:text-primary',
       )}
     >
@@ -137,12 +137,12 @@ const EMOJIS = ['\u{1F604}', '\u{1F602}', '\u{1F60A}', '\u{1F970}', '\u{1F97A}',
 /** 输入框旁的快捷表情条 */
 export function EmojiRow({ onPick }: { onPick: (emoji: string) => void }) {
   return (
-    <div className="flex flex-wrap gap-0.5">
+    <div className="flex flex-nowrap gap-1 overflow-x-auto overscroll-x-contain pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
       {EMOJIS.map(e => (
         <button
           key={e}
           type="button"
-          className="rounded px-1 py-0.5 text-base leading-none transition hover:bg-muted"
+          className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded text-base leading-none transition hover:bg-muted active:bg-primary/10 sm:h-9 sm:min-w-9"
           onClick={() => onPick(e)}
           aria-label={`表情 ${e}`}
         >
@@ -153,13 +153,48 @@ export function EmojiRow({ onPick }: { onPick: (emoji: string) => void }) {
   )
 }
 
-/** 图片放大浏览: 点击任意处关闭 */
+/** 移动端图片预览：显式关闭控件、Esc 返回、背景滚动锁定与安全区适配。 */
 export function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
+  useEffect(() => {
+    if (!src) return
+    const former = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    closeButtonRef.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      onCloseRef.current()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+      former?.focus()
+    }
+  }, [src])
+
   if (!src) return null
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-red-ink/85 p-4 backdrop-blur-sm" onClick={onClose}>
-      <img src={src} alt="" className="max-h-[88vh] max-w-full rounded-md border border-gold/30 object-contain shadow-lift" />
-      <p className="absolute bottom-4 text-xs text-primary-foreground/70">点任意处关闭</p>
+    <div role="dialog" aria-modal="true" aria-label="图片放大预览"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-red-ink/85 p-4 backdrop-blur-sm"
+      onClick={onClose}>
+      <button ref={closeButtonRef} type="button" aria-label="关闭图片预览"
+        className="absolute right-4 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-background/95 text-foreground shadow-lift"
+        style={{ top: 'calc(1rem + env(safe-area-inset-top))' }}
+        onClick={event => { event.stopPropagation(); onClose() }}>
+        <X size={22} />
+      </button>
+      <img src={src} alt="放大查看的图片"
+        className="max-h-[86dvh] max-w-full rounded-md border border-gold/30 object-contain shadow-lift" />
+      <p className="absolute text-xs text-primary-foreground/80"
+        style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
+        点击空白处或关闭按钮返回
+      </p>
     </div>
   )
 }

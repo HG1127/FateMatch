@@ -13,7 +13,7 @@ test('独立版不加载 VibeX/境外字体并使用标准同源 API', async ({ 
   })
 
   await page.goto('/auth', { waitUntil: 'domcontentloaded' })
-  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg')
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/app-icon.svg')
   await expect(page.getByLabel('邮箱', { exact: true })).toBeVisible({ timeout: 25_000 })
   await expect.poll(() => apiRequests.length, { timeout: 30_000 }).toBeGreaterThan(0)
 

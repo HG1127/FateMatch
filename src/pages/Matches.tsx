@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Ban, Flag, MessageSquarePlus, Sparkles } from 'lucide-react'
+import { ArrowLeft, Ban, Flag, MessageSquarePlus, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStore } from '@/lib/store-context'
 import type { User } from '@/lib/store'
@@ -15,13 +15,16 @@ import { cn, fmtTime } from '@/lib/utils'
 export function MatchesPage() {
   const { conversations, isMutual, me, users, unread, toggleBlock, matchScore, match } = useStore()
   const list = conversations()
-  const [searchParams] = useSearchParams()
-  const [selectedId, setSelectedId] = useState(searchParams.get('with') ?? '')
-  const linkedId = searchParams.get('with') ?? ''
-  const [lastLinkedId, setLastLinkedId] = useState(linkedId)
-  if (linkedId !== lastLinkedId) {
-    setLastLinkedId(linkedId)
-    if (linkedId) setSelectedId(linkedId)
+  const [searchParams, setSearchParams] = useSearchParams()
+  // The selected conversation lives in the URL so mobile Back and deep links work.
+  const selectedId = searchParams.get('with') ?? ''
+  const selectConversation = (id: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (id) next.set('with', id)
+    else next.delete('with')
+    setSearchParams(next)
+    // Switching list/detail on a narrow screen must reveal the chat header immediately.
+    if (window.matchMedia('(max-width: 1023px)').matches) window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const [pickerOpen, setPickerOpen] = useState(false)
   const [profile, setProfile] = useState<User | null>(null)
@@ -62,16 +65,16 @@ export function MatchesPage() {
   const visibleList = list.filter(c => (!onlyUnread || unread(c.user.id) > 0) && (!query.trim() || c.user.nickname.toLowerCase().includes(query.trim().toLowerCase())))
 
   return (
-    <div className="clouds-paper mx-auto max-w-6xl px-4 py-10 md:py-14">
-      <div className="mb-8 text-center">
+    <div className={cn('clouds-paper mx-auto max-w-6xl', active ? 'px-0 py-0 lg:px-4 lg:py-14' : 'px-4 py-6 md:py-14')}>
+      <div className={cn('mb-6 text-center lg:mb-8', active && 'hidden lg:block')}>
         <p className="text-xs tracking-[.4em] text-gold">我的佳音</p>
         <h1 className="mt-2 font-xing text-4xl text-foreground md:text-5xl">往来与佳音</h1>
         <p className="mt-2 text-sm text-muted-foreground">这里只展示双方真实互道「有意」的关系 · 点头像看资料,点卡片进入聊天</p>
       </div>
 
-      {pendingIds.length > 0 && <div className="card-cn mx-auto mb-6 max-w-3xl rounded-lg p-4"><p className="font-semibold text-foreground">待回应的有意 · {pendingIds.length}</p><p className="mt-1 text-xs text-muted-foreground">这里只记录你主动表达过的有意，不暗示对方已经看过或即将回应。</p><div className="mt-2 flex flex-wrap gap-2">{pending.map(u => <button key={u.id} className="rounded-full border border-border px-3 py-1.5 text-xs text-primary" onClick={() => setProfile(u)}>{u.nickname} · 查看或撤回</button>)}</div></div>}
+      {pendingIds.length > 0 && <div className={cn('card-cn mx-auto mb-6 max-w-3xl rounded-lg p-4', active && 'hidden lg:block')}><p className="font-semibold text-foreground">待回应的有意 · {pendingIds.length}</p><p className="mt-1 text-xs text-muted-foreground">这里只记录你主动表达过的有意，不暗示对方已经看过或即将回应。</p><div className="mt-2 flex flex-wrap gap-2">{pending.map(u => <button key={u.id} className="rounded-full border border-border px-3 py-1.5 text-xs text-primary" onClick={() => setProfile(u)}>{u.nickname} · 查看或撤回</button>)}</div></div>}
       {unreadConvs.length > 0 && (
-        <div className="card-cn mx-auto mb-6 max-w-3xl rounded-lg p-3.5">
+        <div className={cn('card-cn mx-auto mb-6 max-w-3xl rounded-lg p-3.5', active && 'hidden lg:block')}>
           <p className="text-xs tracking-widest text-gold">
             未读佳音 · 共 <span className="cjk-latin">{totalUnread}</span> 条待你回音
           </p>
@@ -79,7 +82,7 @@ export function MatchesPage() {
             {unreadConvs.map(c => (
               <button
                 key={c.user.id}
-                onClick={() => setSelectedId(c.user.id)}
+                onClick={() => selectConversation(c.user.id)}
                 className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs text-foreground transition hover:border-primary/60"
               >
                 <img src={c.user.photos[0]} alt="" className="h-6 w-6 rounded-full object-cover" />
@@ -91,8 +94,8 @@ export function MatchesPage() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
-        <div className="space-y-3">
+      <div className={cn('grid min-w-0 gap-6 lg:grid-cols-[300px_minmax(0,1fr)]', active && 'gap-0 lg:gap-6')}>
+        <div className={cn('min-w-0 space-y-3', active && 'hidden lg:block')}>
           <button className="btn-gold w-full" onClick={() => setPickerOpen(true)}>
             <MessageSquarePlus size={16} />
             选择互配对象
@@ -103,9 +106,9 @@ export function MatchesPage() {
             <button className={cn('rounded-full border px-3 py-1.5', onlyUnread ? 'bg-primary text-primary-foreground' : 'border-border')} onClick={() => setOnlyUnread(true)}>未读 {unreadConvs.length}</button>
           </div>
           {!visibleList.length && <p className="rounded-md border border-border p-3 text-center text-xs text-muted-foreground">没有符合条件的会话，换个筛选试试。</p>}
-          <div className="flex gap-2 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
+          <div aria-label="会话列表" className="flex flex-col gap-2 pb-2 lg:pb-0">
             {active && !list.some(c => c.user.id === active.id) && (
-              <div role="button" tabIndex={0} aria-label={`打开与${active.nickname}的聊天`} className="card-cn flex w-64 shrink-0 cursor-pointer items-center gap-3 rounded-lg p-3 ring-2 ring-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary lg:w-full" onClick={() => setSelectedId(active.id)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSelectedId(active.id) } }}>
+              <div role="button" tabIndex={0} aria-label={`打开与${active.nickname}的聊天`} className="card-cn flex min-h-[76px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-lg p-3 ring-2 ring-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => selectConversation(active.id)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectConversation(active.id) } }}>
                 <button className="shrink-0 transition hover:opacity-80" onClick={e => { e.stopPropagation(); setProfile(active) }} aria-label="查看资料">
                   <AvatarFrame user={active} className="h-11 w-11">
                     <img src={active.photos[0]} alt={active.nickname} className="h-full w-full rounded-full object-cover" />
@@ -125,10 +128,10 @@ export function MatchesPage() {
                   role="button"
                   tabIndex={0}
                   aria-label={`打开与${c.user.nickname}的聊天`}
-                  onClick={() => setSelectedId(c.user.id)}
-                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSelectedId(c.user.id) } }}
+                  onClick={() => selectConversation(c.user.id)}
+                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectConversation(c.user.id) } }}
                   className={cn(
-                    'card-cn flex w-64 shrink-0 cursor-pointer items-center gap-3 rounded-lg p-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary lg:w-full',
+                    'card-cn flex min-h-[76px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-lg p-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                     active?.id === c.user.id ? 'ring-2 ring-primary' : 'hover:ring-1 hover:ring-primary/40',
                   )}
                 >
@@ -157,18 +160,22 @@ export function MatchesPage() {
             })}
           </div>
         </div>
-        <div className="card-cn overflow-hidden rounded-lg">
+        <div className={cn('card-cn min-w-0 overflow-hidden rounded-lg', active ? 'flex h-[calc(100dvh-4.0625rem-env(safe-area-inset-top))] min-h-0 flex-col rounded-none border-x-0 border-y-0 sm:h-[calc(100dvh-4.5625rem-env(safe-area-inset-top))] lg:h-auto lg:rounded-lg lg:border' : 'hidden lg:block')}>
           {active ? (
             <>
-              <div className="flex items-center gap-3 border-b border-border bg-secondary/40 px-4 py-3">
-                <button className="shrink-0 transition hover:opacity-80" onClick={() => setProfile(active)} aria-label="查看资料">
+              <div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border bg-secondary/40 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+                <button type="button" onClick={() => selectConversation('')} aria-label="返回会话列表"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-primary active:bg-primary/10 lg:hidden">
+                  <ArrowLeft size={21} />
+                </button>
+                <button className="hidden h-11 w-11 shrink-0 items-center justify-center transition hover:opacity-80 sm:flex" onClick={() => setProfile(active)} aria-label="查看资料">
                   <AvatarFrame user={active} className="h-9 w-9">
                     <img src={active.photos[0]} alt={active.nickname} className="h-full w-full rounded-full object-cover" />
                   </AvatarFrame>
                 </button>
-                <div className="flex-1">
-                  <p className="font-xing text-lg leading-none"><NickName user={active} className="text-foreground" /></p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
+                <div className="min-w-0 flex-1">
+                  <button type="button" className="max-w-full text-left font-xing text-lg leading-none" onClick={() => setProfile(active)} aria-label={`查看${active.nickname}的资料`}><NickName user={active} className="block truncate text-foreground" /></button>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
                     {regionOf(active)} · {active.job} · 规则参考 <span className="cjk-latin text-gold">{matchScore(active)}</span> 分
                   </p>
                   {me && active.interests.some(t => me.interests.includes(t)) && (
@@ -181,24 +188,24 @@ export function MatchesPage() {
                 </div>
                 {(() => {
                   const st = statusOf(active.id, activeConv?.lastAt ?? 0, activeConv?.lastFrom ?? '', activeConv?.liked ?? false)
-                  return <span className={cn('rounded-sm border px-1.5 py-0.5 text-[10px]', st.cls)}>{st.label}</span>
+                  return <span className={cn('hidden rounded-sm border px-1.5 py-0.5 text-[10px] sm:inline-block', st.cls)}>{st.label}</span>
                 })()}
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
                   <button
-                    title="举报"
-                    className="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-primary"
+                    title="举报" aria-label="举报该会员"
+                    className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-primary"
                     onClick={() => setReportFor(active)}
                   >
                     <Flag size={15} />
                   </button>
                   <button
-                    title="拉黑"
-                    className="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-primary"
+                    title="拉黑" aria-label="拉黑该会员"
+                    className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-primary"
                     onClick={() => {
                       void toggleBlock(active.id)
                         .then(blocked => {
                           if (!blocked) return
-                          setSelectedId('')
+                          selectConversation('')
                           toast.success('已拉黑,本次聊天已关闭')
                         })
                         .catch(e => toast.error(e instanceof Error ? e.message : '拉黑未保存,请重试'))
@@ -226,7 +233,7 @@ export function MatchesPage() {
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onPick={u => {
-          setSelectedId(u.id)
+          selectConversation(u.id)
           setPickerOpen(false)
         }}
       />

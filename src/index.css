@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Mobile-first interaction basics; preserve desktop layout and visual language. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(4.5rem + env(safe-area-inset-top));
+}
+button, a, [role='button'], [role='tab'] { touch-action: manipulation; }
+textarea, input, select { max-width: 100%; }
+button:focus-visible, a:focus-visible, [role='button']:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+@media (max-width: 1023px) {
+  /* iPhone and iPad Safari can zoom focused inputs below 16px. */
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  textarea, select { font-size: 16px; }
+  .input-cn { min-height: 44px; font-size: 16px; }
+  .btn-cn, .btn-primary, .btn-gold, .btn-outline, .btn-ghost { min-height: 44px; }
+  [id^='profile-'], section[id], [role='heading'] { scroll-margin-top: calc(4.5rem + env(safe-area-inset-top)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+
+
 @layer base {
   :root {
     /* 古典婚庆红 + 宣纸米金 */

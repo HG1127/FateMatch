@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
+import { assertIsolatedLocalDev } from '../scripts/staging-local-target.mjs'
 
 export const SCHEMA_PREFIX = 'e2e_smoke'
 export const GW_PORT = 7200
@@ -39,6 +40,8 @@ async function dropTestSchema(dsn, schema) {
 export default async function globalSetup() {
   const dsn = process.env.NEON_DSN
   if (!dsn) throw new Error('运行发布冒烟需要 NEON_DSN 环境变量')
+  // Defend against directly invoking Playwright and bypassing e2e-run.mjs.
+  assertIsolatedLocalDev({ NEON_DSN: dsn, STAGING_MODE: '1', NEON_SCHEMA: 'staging_e2e_guard' })
   const schema = `${SCHEMA_PREFIX}_${process.pid}_${Date.now().toString(36)}`.toLowerCase()
   if (!/^[a-z0-9_]{1,63}$/.test(schema)) throw new Error('E2E schema 名称无效')
   const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'suiyuan-e2e-uploads-'))

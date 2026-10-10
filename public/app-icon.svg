@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="随缘网">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#973d45"/>
+      <stop offset="0.52" stop-color="#712633"/>
+      <stop offset="1" stop-color="#4b1523"/>
+    </linearGradient>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f7e0aa"/>
+      <stop offset="1" stop-color="#c89b5f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#g)"/>
+  <rect x="26" y="26" width="460" height="460" rx="99" fill="none" stroke="url(#a)" stroke-width="7" opacity=".92"/>
+  <rect x="43" y="43" width="426" height="426" rx="89" fill="none" stroke="#e6c786" stroke-width="2" opacity=".5"/>
+  <circle cx="256" cy="256" r="159" fill="none" stroke="url(#a)" stroke-width="5" opacity=".9"/>
+  <circle cx="256" cy="256" r="146" fill="#661e2c" fill-opacity=".72" stroke="#e5c58a" stroke-width="2" opacity=".86"/>
+  <path d="M256 63v31 M256 418v31 M63 256h31 M418 256h31" stroke="#f5dfad" stroke-width="5" stroke-linecap="round"/>
+  <text x="256" y="337" text-anchor="middle" font-family="SimSun, Songti SC, STSong, serif" font-size="231" font-weight="bold" fill="#f6dbab" stroke="#a96e42" stroke-width="1">缘</text>
+</svg>

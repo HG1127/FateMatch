@@ -7,6 +7,7 @@ const devices = [
   { name: 'small-touch-320', width: 320, height: 568 },
   { name: 'phone-touch-375', width: 375, height: 812 },
   { name: 'android-touch-390', width: 390, height: 844 },
+  { name: 'large-touch-430', width: 430, height: 932 },
   { name: 'tablet-touch-768', width: 768, height: 1024 },
 ]
 
@@ -39,6 +40,13 @@ for (const device of devices) {
       await page.goto(base + '/auth', { waitUntil: 'domcontentloaded' })
       await expect(page.getByRole('heading', { name: '别来无恙' })).toBeVisible()
       await checkWidth('auth')
+      if (device.width < 768) {
+        const fontSize = await page.getByLabel('邮箱', { exact: true }).evaluate(el => getComputedStyle(el).fontSize)
+        expect(fontSize, '手机输入框必须至少 16px 防止 Safari 自动放大').toBe('16px')
+        await page.getByRole('button', { name: '打开更多功能' }).tap()
+        await expect(page.getByRole('dialog', { name: '发现更多' })).toBeVisible()
+        await page.getByRole('button', { name: '关闭更多功能菜单' }).tap()
+      }
       await page.getByLabel('邮箱', { exact: true }).fill(ADMIN_EMAIL)
       await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASS)
       await page.getByRole('button', { name: '登录', exact: true }).last().tap()
@@ -48,6 +56,10 @@ for (const device of devices) {
       const mobileNav = page.locator('nav.fixed')
       if (device.width < 768) {
         await expect(mobileNav).toBeVisible()
+        await page.getByRole('button', { name: '打开更多功能' }).tap()
+        await expect(page.getByRole('navigation', { name: '手机更多功能' })).toBeVisible()
+        await expect(page.getByRole('link', { name: /兴趣筛选/ }).last()).toBeVisible()
+        await page.getByRole('button', { name: '关闭更多功能菜单' }).tap()
         for (const label of ['推荐', '活动', '消息', '我的']) {
           await expect(mobileNav.getByRole('link', { name: label, exact: true })).toBeVisible()
         }
